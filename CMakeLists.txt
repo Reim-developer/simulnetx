@@ -43,6 +43,7 @@ if(SIMULNETX_BUILD_TESTS)
         tests/network_test.cxx
         tests/partition_test.cxx
         tests/rng_test.cxx
+        tests/scenario_test.cxx
     )
     target_link_libraries(simulnetx_tests PRIVATE simulnetx GTest::gtest_main)
 
