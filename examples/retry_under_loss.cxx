@@ -2,7 +2,7 @@
 //
 // A sends "ping" to B and retransmits every 100ms until B's "ack" arrives.
 // The link drops 30% of messages in both directions, and the network is
-// partitioned from t=1s to t=2s. With a fixed seed the whole run is
+// partitioned from t=200ms to t=1s. With a fixed seed the whole run is
 // reproducible: same seed, same attempt count, same ack time.
 //
 // Build: cmake -S . -B build && cmake --build build --target retry_under_loss
@@ -51,9 +51,9 @@ int run() {
     };
     a.after(0ns, retry);
 
-    // Cut the network for one second in the middle of the run.
-    a.after(1s, [&] { net.partition({a.id()}, {b.id()}); });
-    a.after(2s, [&] { net.heal(); });
+    // Cut the network for 800ms in the middle of the run.
+    a.after(200ms, [&] { net.partition({a.id()}, {b.id()}); });
+    a.after(1s, [&] { net.heal(); });
 
     net.run_for(5s);
 
