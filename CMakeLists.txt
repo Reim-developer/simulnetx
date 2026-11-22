@@ -20,3 +20,37 @@ if(MSVC)
 else()
     target_compile_options(simulnetx PRIVATE -Wall -Wextra -Werror)
 endif()
+
+option(SIMULNETX_BUILD_TESTS "Build simulnetx tests" ON)
+
+if(SIMULNETX_BUILD_TESTS)
+    include(FetchContent)
+    FetchContent_Declare(
+        googletest
+        URL https://github.com/google/googletest/archive/refs/tags/v1.14.0.zip
+    )
+    # For Windows: prevent overriding the parent project's compiler/linker settings.
+    set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
+    FetchContent_MakeAvailable(googletest)
+
+    enable_testing()
+
+    add_executable(simulnetx_tests
+        tests/determinism_test.cxx
+        tests/expectation_test.cxx
+        tests/golden_test.cxx
+        tests/network_test.cxx
+        tests/partition_test.cxx
+        tests/rng_test.cxx
+    )
+    target_link_libraries(simulnetx_tests PRIVATE simulnetx GTest::gtest_main)
+
+    if(MSVC)
+        target_compile_options(simulnetx_tests PRIVATE /W4 /WX)
+    else()
+        target_compile_options(simulnetx_tests PRIVATE -Wall -Wextra -Werror)
+    endif()
+
+    include(GoogleTest)
+    gtest_discover_tests(simulnetx_tests)
+endif()
