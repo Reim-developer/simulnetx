@@ -1,5 +1,6 @@
 #include "simulnetx/scenario.hxx"
 
+#include <algorithm>
 #include <stdexcept>
 #include <utility>
 
@@ -32,6 +33,109 @@ simulnetx::network& scenario::network() {
 scenario& scenario::run_until(std::chrono::nanoseconds t) {
     ensure_network().run_until(t);
     return *this;
+}
+
+scenario& scenario::partition_at(std::chrono::nanoseconds t,
+                                 std::initializer_list<std::string_view> group_a,
+                                 std::initializer_list<std::string_view> group_b) {
+    std::vector<node_id> a_ids;
+    std::vector<node_id> b_ids;
+    a_ids.reserve(group_a.size());
+    b_ids.reserve(group_b.size());
+    for (const std::string_view name : group_a) {
+        a_ids.push_back(resolve_node(name).id());
+    }
+    for (const std::string_view name : group_b) {
+        b_ids.push_back(resolve_node(name).id());
+    }
+    for (const node_id id : a_ids) {
+        if (std::find(b_ids.begin(), b_ids.end(), id) != b_ids.end()) {
+            throw std::invalid_argument("simulnetx: scenario '" + name_ +
+                                        "': node appears in both partition groups");
+        }
+    }
+    schedule_at(t, [net = &ensure_network(), a = std::move(a_ids), b = std::move(b_ids)] {
+        net->partition(a, b);
+    });
+    return *this;
+}
+
+scenario& scenario::heal_at(std::chrono::nanoseconds t) {
+    schedule_at(t, [net = &ensure_network()] { net->heal(); });
+    return *this;
+}
+
+scenario& scenario::send_at(std::chrono::nanoseconds t, std::string_view from, std::string_view to,
+                            std::string_view payload) {
+    std::vector<std::byte> bytes;
+    bytes.reserve(payload.size());
+    for (const char c : payload) {
+        bytes.push_back(static_cast<std::byte>(c));
+    }
+    return send_at(t, from, to, std::move(bytes));
+}
+
+scenario& scenario::send_at(std::chrono::nanoseconds t, std::string_view from, std::string_view to,
+                            std::vector<std::byte> payload) {
+    simulnetx::node& from_node = resolve_node(from);
+    const node_id to_id = resolve_node(to).id();
+    schedule_at(t, [from_ptr = &from_node, to_id, bytes = std::move(payload)] {
+        from_ptr->send(to_id, bytes);
+    });
+    return *this;
+}
+
+scenario& scenario::on_message(std::string_view name,
+                               std::function<void(const message&)> handler) {
+    resolve_node(name).on_message(std::move(handler));
+    return *this;
+}
+
+scenario& scenario::expect_sent(std::size_t n) {
+    check([this, n] { ensure_network().sent_count().equal(n); });
+    return *this;
+}
+
+scenario& scenario::expect_delivered(std::size_t n) {
+    check([this, n] { ensure_network().delivered_count().equal(n); });
+    return *this;
+}
+
+scenario& scenario::expect_dropped(std::size_t n) {
+    check([this, n] { ensure_network().dropped_count().equal(n); });
+    return *this;
+}
+
+scenario& scenario::expect_sent_between(std::size_t lo, std::size_t hi) {
+    check([this, lo, hi] { ensure_network().sent_count().between(lo, hi); });
+    return *this;
+}
+
+scenario& scenario::expect_delivered_between(std::size_t lo, std::size_t hi) {
+    check([this, lo, hi] { ensure_network().delivered_count().between(lo, hi); });
+    return *this;
+}
+
+scenario& scenario::expect_dropped_between(std::size_t lo, std::size_t hi) {
+    check([this, lo, hi] { ensure_network().dropped_count().between(lo, hi); });
+    return *this;
+}
+
+simulnetx::node& scenario::timer_node() {
+    if (nodes_.empty()) {
+        throw std::logic_error("simulnetx: scenario '" + name_ +
+                               "': cannot schedule an event before any node exists");
+    }
+    return *nodes_.begin()->second;
+}
+
+void scenario::schedule_at(std::chrono::nanoseconds t, std::function<void()> callback) {
+    simulnetx::network& net = ensure_network();
+    if (t < net.now()) {
+        throw std::invalid_argument("simulnetx: scenario '" + name_ +
+                                    "': scheduled time is in the past");
+    }
+    timer_node().after(t - net.now(), std::move(callback));
 }
 
 simulnetx::network& scenario::ensure_network() {

@@ -2,15 +2,20 @@
 
 #include <chrono>
 #include <concepts>
+#include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <initializer_list>
 #include <map>
 #include <memory>
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
+#include "simulnetx/errors.hxx"
 #include "simulnetx/link_config.hxx"
+#include "simulnetx/message.hxx"
 #include "simulnetx/network.hxx"
 #include "simulnetx/node.hxx"
 
@@ -84,10 +89,64 @@ public:
     // before the current virtual time.
     scenario& run_until(std::chrono::nanoseconds t);
 
+    // Schedule a partition at virtual time t: from t on, messages between
+    // the two groups are dropped until a heal. Names are resolved now; an
+    // unknown name, or a name in both groups, throws std::invalid_argument.
+    // A time in the past throws std::invalid_argument.
+    scenario& partition_at(std::chrono::nanoseconds t,
+                           std::initializer_list<std::string_view> group_a,
+                           std::initializer_list<std::string_view> group_b);
+
+    // Schedule a heal at virtual time t. A time in the past throws
+    // std::invalid_argument.
+    scenario& heal_at(std::chrono::nanoseconds t);
+
+    // Schedule a send at virtual time t. Names are resolved now; an unknown
+    // name throws std::invalid_argument. The payload is copied now. If no
+    // link exists when the send fires, node::send throws inside run_until.
+    // A time in the past throws std::invalid_argument.
+    scenario& send_at(std::chrono::nanoseconds t, std::string_view from, std::string_view to,
+                      std::string_view payload);
+    scenario& send_at(std::chrono::nanoseconds t, std::string_view from, std::string_view to,
+                      std::vector<std::byte> payload);
+
+    // Set the message handler on the named node. An unknown name throws
+    // std::invalid_argument.
+    scenario& on_message(std::string_view name, std::function<void(const message&)> handler);
+
+    // Exact-count checks, delegating to the network's expectation API. Each
+    // returns scenario& so checks chain. A failure throws
+    // simulnetx::assertion_failed with the scenario name prefixed:
+    //   scenario 'retry under 30% loss': expected delivered_count == 1, ...
+    scenario& expect_sent(std::size_t n);
+    scenario& expect_delivered(std::size_t n);
+    scenario& expect_dropped(std::size_t n);
+    scenario& expect_sent_between(std::size_t lo, std::size_t hi);
+    scenario& expect_delivered_between(std::size_t lo, std::size_t hi);
+    scenario& expect_dropped_between(std::size_t lo, std::size_t hi);
+
 private:
     simulnetx::network& ensure_network();
     void add_node_named(std::string_view name);
     simulnetx::node& resolve_node(std::string_view name);
+
+    // Any node, for scheduling timers through node::after. Throws
+    // std::logic_error if no node exists yet.
+    simulnetx::node& timer_node();
+
+    // Schedule a callback at absolute virtual time t. Throws
+    // std::invalid_argument if t is in the past.
+    void schedule_at(std::chrono::nanoseconds t, std::function<void()> callback);
+
+    // Run a check, prefixing any assertion failure with the scenario name.
+    template <typename F>
+    void check(F&& fn) {
+        try {
+            fn();
+        } catch (const assertion_failed& e) {
+            throw assertion_failed("scenario '" + name_ + "': " + e.what());
+        }
+    }
 
     std::string name_;
     std::uint64_t seed_{0};
