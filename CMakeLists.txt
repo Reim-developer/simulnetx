@@ -38,6 +38,7 @@ if(SIMULNETX_BUILD_TESTS)
 
     add_executable(simulnetx_tests
         tests/determinism_test.cxx
+        tests/directed_test.cxx
         tests/expectation_test.cxx
         tests/golden_test.cxx
         tests/network_test.cxx

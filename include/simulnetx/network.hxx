@@ -41,11 +41,19 @@ public:
     // calls and for the lifetime of the network.
     node& add_node(std::string name);
 
-    // Connect two nodes with the given behavior, in both directions (symmetric
-    // config in v0.1.0). Re-linking replaces the config.
-    // Throws std::invalid_argument for unknown node ids, a self-link, or an
-    // invalid config.
+    // Connect two nodes with the given behavior, in both directions. A later
+    // link() or link_directed() call replaces the config of the direction(s)
+    // it covers. Throws std::invalid_argument for unknown node ids, a
+    // self-link, or an invalid config.
     void link(node_id a, node_id b, link_config cfg);
+
+    // Connect two nodes in ONE direction only: from -> to uses cfg, while
+    // to -> from is unchanged (and still has no link if none was set).
+    // A later link_directed() call replaces only that direction's config; a
+    // later link() call resets both directions. Throws
+    // std::invalid_argument for unknown node ids, a self-link, or an invalid
+    // config.
+    void link_directed(node_id from, node_id to, link_config cfg);
 
     // Drop all messages between the two groups while the partition lasts
     // (counted as dropped). Nodes in neither group are unaffected, and

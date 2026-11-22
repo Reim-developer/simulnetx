@@ -7,11 +7,6 @@ namespace simulnetx {
 
 namespace {
 
-// Canonical key for an undirected link between two nodes.
-std::pair<node_id, node_id> link_key(node_id a, node_id b) {
-    return a < b ? std::pair{a, b} : std::pair{b, a};
-}
-
 void validate_config(const link_config& cfg) {
     if (cfg.latency.count() < 0 || cfg.jitter.count() < 0) {
         throw std::invalid_argument("simulnetx: link latency and jitter must be non-negative");
@@ -41,7 +36,23 @@ void network::link(node_id a, node_id b, link_config cfg) {
         throw std::invalid_argument("simulnetx: cannot link a node to itself (self-send needs no link)");
     }
     validate_config(cfg);
-    links_[link_key(a, b)] = cfg;
+    // Links are stored keyed by ordered pair, so a symmetric link sets both
+    // directions. Sampling reads only the (from, to) entry, so the storage
+    // change does not alter RNG behavior for symmetric links.
+    links_[{a, b}] = cfg;
+    links_[{b, a}] = cfg;
+}
+
+void network::link_directed(node_id from, node_id to, link_config cfg) {
+    if (from >= nodes_.size() || to >= nodes_.size()) {
+        throw std::invalid_argument("simulnetx: link_directed references an unknown node id");
+    }
+    if (from == to) {
+        throw std::invalid_argument(
+            "simulnetx: cannot link a node to itself (self-send needs no link)");
+    }
+    validate_config(cfg);
+    links_[{from, to}] = cfg;
 }
 
 void network::partition(std::vector<node_id> group_a, std::vector<node_id> group_b) {
@@ -114,7 +125,7 @@ void network::send_from(node_id from, node_id to, std::vector<std::byte> payload
         return;
     }
 
-    const auto it = links_.find(link_key(from, to));
+    const auto it = links_.find({from, to});
     if (it == links_.end()) {
         throw std::invalid_argument("simulnetx: no link between the sending and receiving nodes");
     }

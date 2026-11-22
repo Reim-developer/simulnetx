@@ -4,8 +4,7 @@
 
 namespace simulnetx {
 
-// Per-link behavior. Links are bidirectional and symmetric in v0.1.0: the same
-// config applies in both directions.
+// Per-link behavior for ONE direction of travel.
 //
 // latency: base one-way delay added to every delivery.
 // jitter: an extra uniform [0, jitter] delay sampled per message.
@@ -17,7 +16,9 @@ namespace simulnetx {
 //   jitter is zero.
 //
 // Rates must be in [0, 1] and delays must be non-negative;
-// network::link throws std::invalid_argument otherwise.
+// network::link and network::link_directed throw std::invalid_argument
+// otherwise. network::link applies one config to both directions;
+// network::link_directed applies it to a single direction.
 struct link_config {
     std::chrono::nanoseconds latency{0};
     std::chrono::nanoseconds jitter{0};
