@@ -100,6 +100,20 @@ void network::run_for(std::chrono::nanoseconds d) {
     run_until(now_ + d);
 }
 
+void network::after(std::chrono::nanoseconds delay, std::function<void()> callback) {
+    if (delay.count() < 0) {
+        throw std::invalid_argument("simulnetx: timer delay must be non-negative");
+    }
+    schedule(now_ + delay, std::move(callback));
+}
+
+void network::schedule_at(std::chrono::nanoseconds t, std::function<void()> callback) {
+    if (t < now_) {
+        throw std::invalid_argument("simulnetx: schedule_at time is before the current virtual time");
+    }
+    schedule(t, std::move(callback));
+}
+
 expectation<std::size_t> network::sent_count() const {
     return expectation<std::size_t>(sent_, "sent_count", detail::sim_context{seed_, now_});
 }

@@ -139,6 +139,42 @@ TEST(NetworkTest, TimerFiresAtExactVirtualTime) {
     EXPECT_EQ(fired_at[1], 150000000LL);
 }
 
+TEST(NetworkTest, NetworkTimerFiresAtExactVirtualTime) {
+    simulnetx::network net(1);
+    std::vector<long long> fired_at;
+    net.after(100ms, [&] {
+        fired_at.push_back(net.now().count());
+        net.after(50ms, [&] { fired_at.push_back(net.now().count()); });
+    });
+    net.run_for(200ms);
+    ASSERT_EQ(fired_at.size(), 2u);
+    EXPECT_EQ(fired_at[0], 100000000LL);
+    EXPECT_EQ(fired_at[1], 150000000LL);
+}
+
+TEST(NetworkTest, NetworkTimerNeedsNoNode) {
+    // Unlike node timers, network timers work on an empty network.
+    simulnetx::network net(1);
+    int fired = 0;
+    net.after(10ms, [&] { ++fired; });
+    net.schedule_at(20ms, [&] { ++fired; });
+    net.run_for(100ms);
+    EXPECT_EQ(fired, 2);
+}
+
+TEST(NetworkTest, NetworkScheduleAtInPastThrows) {
+    simulnetx::network net(1);
+    net.run_for(1s);
+    EXPECT_THROW(net.schedule_at(500ms, [] {}), std::invalid_argument);
+    // Scheduling exactly at now is fine.
+    EXPECT_NO_THROW(net.schedule_at(1s, [] {}));
+}
+
+TEST(NetworkTest, NetworkAfterNegativeDelayThrows) {
+    simulnetx::network net(1);
+    EXPECT_THROW(net.after(-1ms, [] {}), std::invalid_argument);
+}
+
 TEST(NetworkTest, ZeroDelayTimerFiresAtCurrentTime) {
     simulnetx::network net(1);
     auto& a = net.add_node("A");

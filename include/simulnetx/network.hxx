@@ -76,6 +76,18 @@ public:
     // negative duration.
     void run_for(std::chrono::nanoseconds d);
 
+    // Schedule a callback at the current virtual time + delay. Network timers
+    // are infrastructure, not node behavior: they are NOT cancelled by node
+    // crashes, and they need no node to exist. Callbacks may send messages,
+    // schedule further timers and crash/restart nodes. Throws
+    // std::invalid_argument for a negative delay.
+    void after(std::chrono::nanoseconds delay, std::function<void()> callback);
+
+    // Schedule a callback at absolute virtual time t. Same crash immunity as
+    // after(). Throws std::invalid_argument if t is before the current
+    // virtual time.
+    void schedule_at(std::chrono::nanoseconds t, std::function<void()> callback);
+
     // Current virtual time.
     std::chrono::nanoseconds now() const { return now_; }
 
