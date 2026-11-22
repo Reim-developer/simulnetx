@@ -1,0 +1,114 @@
+#pragma once
+
+#include <chrono>
+#include <cstddef>
+#include <cstdint>
+#include <functional>
+#include <map>
+#include <memory>
+#include <queue>
+#include <string>
+#include <utility>
+#include <vector>
+
+#include "simulnetx/expectation.hxx"
+#include "simulnetx/link_config.hxx"
+#include "simulnetx/message.hxx"
+#include "simulnetx/node.hxx"
+#include "simulnetx/rng.hxx"
+
+namespace simulnetx {
+
+// An in-process simulated network with a virtual clock.
+//
+// Same seed + same scenario = identical results on every run, on every
+// platform: the event queue is ordered by (virtual time, sequence number) and
+// all randomness comes from the hand-rolled splitmix64 RNG.
+//
+// The simulation is single-threaded and uses no real time, no real threads,
+// no sockets and no OS calls.
+class network {
+public:
+    explicit network(std::uint64_t seed) : seed_(seed), rng_(seed) {}
+
+    network(const network&) = delete;
+    network& operator=(const network&) = delete;
+    network(network&&) = delete;
+    network& operator=(network&&) = delete;
+
+    // Add a node. The returned reference stays valid across later add_node
+    // calls and for the lifetime of the network.
+    node& add_node(std::string name);
+
+    // Connect two nodes with the given behavior, in both directions (symmetric
+    // config in v0.1.0). Re-linking replaces the config.
+    // Throws std::invalid_argument for unknown node ids, a self-link, or an
+    // invalid config.
+    void link(node_id a, node_id b, link_config cfg);
+
+    // Advance the virtual clock to t, processing all events scheduled at or
+    // before t in (time, sequence) order. Throws std::invalid_argument if t
+    // is before the current virtual time.
+    void run_until(std::chrono::nanoseconds t);
+
+    // Advance the virtual clock by d. Throws std::invalid_argument for a
+    // negative duration.
+    void run_for(std::chrono::nanoseconds d);
+
+    // Current virtual time.
+    std::chrono::nanoseconds now() const { return now_; }
+
+    // Statistics as checkable expectations. Each expectation carries the seed
+    // and the current virtual time, so a failed check reports both.
+    expectation<std::size_t> sent_count() const;
+    expectation<std::size_t> delivered_count() const;
+    expectation<std::size_t> dropped_count() const;
+
+private:
+    friend class node;
+
+    // One scheduled action: a message delivery or a timer callback. Ordered by
+    // (time, sequence): the sequence number is a monotonically increasing
+    // tiebreaker, so the order is fully deterministic.
+    struct scheduled_event {
+        std::chrono::nanoseconds time;
+        std::uint64_t seq;
+        std::function<void()> action;
+    };
+
+    // Later (time, sequence) sorts first in the priority queue, so the
+    // earliest event is always on top.
+    struct event_later {
+        bool operator()(const scheduled_event& a, const scheduled_event& b) const {
+            if (a.time != b.time) {
+                return a.time > b.time;
+            }
+            return a.seq > b.seq;
+        }
+    };
+
+    void send_from(node_id from, node_id to, std::vector<std::byte> payload);
+    void schedule_timer(std::chrono::nanoseconds delay, std::function<void()> callback);
+    void schedule(std::chrono::nanoseconds time, std::function<void()> action);
+    void deliver(const message& msg);
+
+    // Uniform delay in [0, range] sampled from the RNG. Returns 0 when the
+    // range is 0 (and draws nothing from the RNG in that case).
+    std::chrono::nanoseconds sample_delay(std::chrono::nanoseconds range);
+
+    std::uint64_t seed_;
+    splitmix64 rng_;
+    std::chrono::nanoseconds now_{0};
+    std::uint64_t next_seq_{0};
+
+    std::vector<std::unique_ptr<node>> nodes_;
+    std::map<std::pair<node_id, node_id>, link_config> links_;
+
+    std::priority_queue<scheduled_event, std::vector<scheduled_event>, event_later> events_;
+
+    std::size_t sent_{0};
+    std::size_t delivered_{0};
+    std::size_t dropped_{0};
+};
+
+}  // namespace simulnetx

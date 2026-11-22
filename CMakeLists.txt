@@ -6,6 +6,8 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 add_library(simulnetx
+    src/network.cxx
+    src/node.cxx
     src/rng.cxx
 )
 target_include_directories(simulnetx PUBLIC
