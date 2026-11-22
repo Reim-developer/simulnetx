@@ -31,13 +31,16 @@ public:
     void on_message(std::function<void(const message&)> handler);
 
     // Send a message to another node. Throws std::invalid_argument if there is
-    // no link to the destination or the destination does not exist. Sending to
-    // self always works and delivers at the current virtual time.
+    // no link to the destination or the destination does not exist, and
+    // std::logic_error if this node is crashed. Sending to self always works
+    // and delivers at the current virtual time.
     void send(node_id to, std::vector<std::byte> payload);
     void send(node_id to, std::string_view payload);
 
     // Schedule a callback at the current virtual time + delay. Callbacks may
-    // send messages and schedule further timers.
+    // send messages and schedule further timers. Throws std::logic_error if
+    // this node is crashed. A timer scheduled before a crash never fires,
+    // even if the node restarts before its fire time.
     void after(std::chrono::nanoseconds delay, std::function<void()> callback);
 
 private:

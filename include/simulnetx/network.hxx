@@ -67,6 +67,27 @@ public:
     // stay dropped.
     void heal();
 
+    // Crash a node: it stops processing. Messages TO it are dropped (checked
+    // at send time and at delivery time, like a partition); it cannot send
+    // or schedule timers (both throw std::logic_error); its pending timers
+    // are cancelled and are NOT restored by restart. The message handler is
+    // preserved across restart: it is code, not state. Crash consumes no
+    // RNG draws, and is independent of partitions: restart does not heal a
+    // partition. Crashing an already-crashed node is a no-op. Throws
+    // std::invalid_argument for an unknown node id.
+    void crash(node_id id);
+
+    // Restart a crashed node: it can receive, send and schedule again. A
+    // message whose delivery time falls after the restart IS delivered
+    // (messages are external to the process, so they survive a crash if they
+    // arrive after the restart). Restarting a live node is a no-op. Throws
+    // std::invalid_argument for an unknown node id.
+    void restart(node_id id);
+
+    // Whether the node is currently crashed. Throws std::invalid_argument
+    // for an unknown node id.
+    bool is_crashed(node_id id) const;
+
     // Advance the virtual clock to t, processing all events scheduled at or
     // before t in (time, sequence) order. Throws std::invalid_argument if t
     // is before the current virtual time.
@@ -121,7 +142,13 @@ private:
     };
 
     void send_from(node_id from, node_id to, std::vector<std::byte> payload);
-    void schedule_timer(std::chrono::nanoseconds delay, std::function<void()> callback);
+    // Schedule a timer owned by one node. The callback captures the node's
+    // generation at schedule time and no-ops if the generation changed
+    // (i.e. the node crashed in between), so node timers are cancelled by a
+    // crash and never restored by a restart. Throws std::logic_error if the
+    // node is currently crashed, std::invalid_argument for a negative delay.
+    void schedule_node_timer(node_id owner, std::chrono::nanoseconds delay,
+                             std::function<void()> callback);
     void schedule(std::chrono::nanoseconds time, std::function<void()> action);
     void deliver(const message& msg);
 
@@ -140,6 +167,13 @@ private:
     std::map<std::pair<node_id, node_id>, link_config> links_;
     std::unordered_set<node_id> partition_a_;
     std::unordered_set<node_id> partition_b_;
+
+    // Crashed nodes, and the per-node generation counter: crash() increments
+    // a node's generation, which cancels its pending timers (they capture the
+    // generation at schedule time and no-op on mismatch). Restart does not
+    // reset the generation, so pre-crash timers never fire.
+    std::unordered_set<node_id> crashed_;
+    std::vector<std::uint64_t> generations_;
 
     std::priority_queue<scheduled_event, std::vector<scheduled_event>, event_later> events_;
 

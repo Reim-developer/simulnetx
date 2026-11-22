@@ -25,6 +25,7 @@ node& network::add_node(std::string name) {
     // Direct new: std::make_unique cannot call node's private constructor
     // (friendship does not extend to it); network is a friend, so new works.
     nodes_.push_back(std::unique_ptr<node>(new node(this, id, std::move(name))));
+    generations_.push_back(0);
     return *nodes_.back();
 }
 
@@ -80,6 +81,34 @@ void network::heal() {
     partition_b_.clear();
 }
 
+void network::crash(node_id id) {
+    if (id >= nodes_.size()) {
+        throw std::invalid_argument("simulnetx: crash references an unknown node id");
+    }
+    if (crashed_.contains(id)) {
+        return;
+    }
+    crashed_.insert(id);
+    // Bumping the generation cancels the node's pending timers: their
+    // callbacks check the generation at fire time and no-op on mismatch.
+    // No RNG draws are consumed.
+    ++generations_[id];
+}
+
+void network::restart(node_id id) {
+    if (id >= nodes_.size()) {
+        throw std::invalid_argument("simulnetx: restart references an unknown node id");
+    }
+    crashed_.erase(id);
+}
+
+bool network::is_crashed(node_id id) const {
+    if (id >= nodes_.size()) {
+        throw std::invalid_argument("simulnetx: is_crashed references an unknown node id");
+    }
+    return crashed_.contains(id);
+}
+
 void network::run_until(std::chrono::nanoseconds t) {
     if (t < now_) {
         throw std::invalid_argument("simulnetx: run_until target is before the current virtual time");
@@ -130,6 +159,10 @@ void network::send_from(node_id from, node_id to, std::vector<std::byte> payload
     if (to >= nodes_.size()) {
         throw std::invalid_argument("simulnetx: send to unknown node id");
     }
+    // A dead process cannot send, not even to itself.
+    if (crashed_.contains(from)) {
+        throw std::logic_error("simulnetx: cannot send from a crashed node");
+    }
 
     // Self-send: no link needed, delivers at the current virtual time.
     if (from == to) {
@@ -149,6 +182,13 @@ void network::send_from(node_id from, node_id to, std::vector<std::byte> payload
     // Partitioned at send time: the message never enters the network, and no
     // RNG draws are consumed for it.
     if (partitioned_between(from, to)) {
+        ++dropped_;
+        return;
+    }
+
+    // Destination crashed at send time: same treatment as a partition, no
+    // RNG draws consumed.
+    if (crashed_.contains(to)) {
         ++dropped_;
         return;
     }
@@ -183,11 +223,22 @@ void network::send_from(node_id from, node_id to, std::vector<std::byte> payload
     schedule(arrival, [this, msg = std::move(msg)] { deliver(msg); });
 }
 
-void network::schedule_timer(std::chrono::nanoseconds delay, std::function<void()> callback) {
+void network::schedule_node_timer(node_id owner, std::chrono::nanoseconds delay,
+                                  std::function<void()> callback) {
     if (delay.count() < 0) {
         throw std::invalid_argument("simulnetx: timer delay must be non-negative");
     }
-    schedule(now_ + delay, std::move(callback));
+    if (crashed_.contains(owner)) {
+        throw std::logic_error("simulnetx: cannot schedule a timer on a crashed node");
+    }
+    const std::uint64_t generation = generations_[owner];
+    schedule(now_ + delay, [this, owner, generation, cb = std::move(callback)] {
+        // The node crashed (and possibly restarted) since this timer was
+        // scheduled: the timer belonged to the dead incarnation and is gone.
+        if (generations_[owner] == generation) {
+            cb();
+        }
+    });
 }
 
 void network::schedule(std::chrono::nanoseconds time, std::function<void()> action) {
@@ -198,6 +249,14 @@ void network::deliver(const message& msg) {
     // Partitioned at delivery time: a message that was in flight when the
     // partition started is lost.
     if (partitioned_between(msg.from, msg.to)) {
+        ++dropped_;
+        return;
+    }
+    // Destination crashed at delivery time: a message that was in flight
+    // when the node went down is lost. A message arriving after a restart
+    // is delivered: the check is on the destination's state now, not on
+    // when the message was sent.
+    if (crashed_.contains(msg.to)) {
         ++dropped_;
         return;
     }
