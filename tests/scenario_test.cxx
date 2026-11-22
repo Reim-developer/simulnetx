@@ -159,6 +159,8 @@ TEST(ScenarioTest, ScheduleInPastThrows) {
     EXPECT_THROW(s.partition_at(5s, {"A"}, {"B"}), std::invalid_argument);
     EXPECT_THROW(s.heal_at(5s), std::invalid_argument);
     EXPECT_THROW(s.send_at(5s, "A", "B", "x"), std::invalid_argument);
+    EXPECT_THROW(s.crash_at(5s, "A"), std::invalid_argument);
+    EXPECT_THROW(s.restart_at(5s, "A"), std::invalid_argument);
 }
 
 TEST(ScenarioTest, HealAtWithoutPartitionIsHarmless) {
@@ -250,6 +252,72 @@ TEST(ScenarioTest, DefaultSeedIsZero) {
     EXPECT_EQ(static_cast<std::size_t>(u.network().delivered_count()),
               static_cast<std::size_t>(z.network().delivered_count()));
     EXPECT_GT(unseeded.size(), 0u);
+}
+
+TEST(ScenarioTest, CrashAtRestartAtEndToEnd) {
+    simulnetx::scenario s("crash window");
+    s.seed(1)
+        .nodes("A", "B")
+        .link("A", "B", {.latency = 500ms})
+        .send_at(0s, "A", "B", "before")      // arrives 0.5s, delivered
+        .send_at(900ms, "A", "B", "in-flight")  // arrives 1.4s, dropped at delivery
+        .send_at(2s, "A", "B", "during")      // dropped at send (B crashed)
+        .send_at(4s, "A", "B", "after")       // arrives 4.5s, delivered
+        .crash_at(1s, "B")
+        .restart_at(3s, "B")
+        .run_until(6s)
+        .expect_sent(4)
+        .expect_delivered(2)
+        .expect_dropped(2);
+    EXPECT_FALSE(s.network().is_crashed(s.node("B").id()));
+}
+
+TEST(ScenarioTest, CrashAtRestartAtUnknownNameThrows) {
+    simulnetx::scenario s("unknown crash");
+    s.nodes("A", "B");
+    EXPECT_THROW(s.crash_at(1s, "C"), std::invalid_argument);
+    EXPECT_THROW(s.restart_at(1s, "C"), std::invalid_argument);
+}
+
+TEST(ScenarioTest, SchedulingWithZeroNodesWorks) {
+    // v0.3.0 behavior change: scheduling used to go through a node's timer
+    // and threw std::logic_error before any node existed. Scheduling now
+    // uses network-level timers, so it works on an empty scenario.
+    simulnetx::scenario s("zero nodes");
+    EXPECT_NO_THROW(s.heal_at(1s));
+    EXPECT_NO_THROW(s.partition_at(1s, {}, {}));
+    EXPECT_NO_THROW(s.run_until(2s));
+    s.expect_sent(0).expect_delivered(0).expect_dropped(0);
+    // Unknown names still throw, even with zero nodes.
+    EXPECT_THROW(s.crash_at(1s, "A"), std::invalid_argument);
+    EXPECT_THROW(s.send_at(1s, "A", "B", "x"), std::invalid_argument);
+}
+
+TEST(ScenarioTest, LinkDirectedChain) {
+    simulnetx::scenario s("directed");
+    s.nodes("A", "B")
+        .link_directed("A", "B", {})
+        .send_at(0s, "A", "B", "x")
+        .run_until(1s)
+        .expect_delivered(1);
+    EXPECT_THROW(s.link_directed("A", "C", {}), std::invalid_argument);
+    EXPECT_THROW(s.link_directed("A", "A", {}), std::invalid_argument);
+}
+
+TEST(ScenarioTest, SendAtAgainstMissingDirectedLinkThrowsInRunUntil) {
+    simulnetx::scenario s("no reverse link");
+    s.nodes("A", "B").link_directed("A", "B", {}).send_at(0s, "B", "A", "x");
+    EXPECT_THROW(s.run_until(1s), std::invalid_argument);
+}
+
+TEST(ScenarioTest, SendAtWhileSenderCrashedThrowsInRunUntil) {
+    // Loud, not silent: the scenario is inconsistent and the user must see it.
+    simulnetx::scenario s("crashed sender");
+    s.nodes("A", "B")
+        .link("A", "B", {})
+        .crash_at(1s, "A")
+        .send_at(2s, "A", "B", "x");
+    EXPECT_THROW(s.run_until(5s), std::logic_error);
 }
 
 }  // namespace

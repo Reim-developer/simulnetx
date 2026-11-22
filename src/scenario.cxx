@@ -22,6 +22,13 @@ scenario& scenario::link(std::string_view a, std::string_view b, link_config cfg
     return *this;
 }
 
+scenario& scenario::link_directed(std::string_view a, std::string_view b, link_config cfg) {
+    const node_id a_id = resolve_node(a).id();
+    const node_id b_id = resolve_node(b).id();
+    ensure_network().link_directed(a_id, b_id, cfg);
+    return *this;
+}
+
 simulnetx::node& scenario::node(std::string_view name) {
     return resolve_node(name);
 }
@@ -62,6 +69,18 @@ scenario& scenario::partition_at(std::chrono::nanoseconds t,
 
 scenario& scenario::heal_at(std::chrono::nanoseconds t) {
     schedule_at(t, [net = &ensure_network()] { net->heal(); });
+    return *this;
+}
+
+scenario& scenario::crash_at(std::chrono::nanoseconds t, std::string_view name) {
+    const node_id id = resolve_node(name).id();
+    schedule_at(t, [net = &ensure_network(), id] { net->crash(id); });
+    return *this;
+}
+
+scenario& scenario::restart_at(std::chrono::nanoseconds t, std::string_view name) {
+    const node_id id = resolve_node(name).id();
+    schedule_at(t, [net = &ensure_network(), id] { net->restart(id); });
     return *this;
 }
 
@@ -121,21 +140,16 @@ scenario& scenario::expect_dropped_between(std::size_t lo, std::size_t hi) {
     return *this;
 }
 
-simulnetx::node& scenario::timer_node() {
-    if (nodes_.empty()) {
-        throw std::logic_error("simulnetx: scenario '" + name_ +
-                               "': cannot schedule an event before any node exists");
-    }
-    return *nodes_.begin()->second;
-}
-
 void scenario::schedule_at(std::chrono::nanoseconds t, std::function<void()> callback) {
     simulnetx::network& net = ensure_network();
     if (t < net.now()) {
         throw std::invalid_argument("simulnetx: scenario '" + name_ +
                                     "': scheduled time is in the past");
     }
-    timer_node().after(t - net.now(), std::move(callback));
+    // Network-level timer: needs no node to exist, and survives node
+    // crashes (a crash_at scheduled before a crash still fires, and a
+    // restart_at scheduled during a crash still fires).
+    net.schedule_at(t, std::move(callback));
 }
 
 simulnetx::network& scenario::ensure_network() {

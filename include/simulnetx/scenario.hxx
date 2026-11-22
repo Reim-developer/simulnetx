@@ -77,6 +77,11 @@ public:
     // network::link. An unknown name throws std::invalid_argument.
     scenario& link(std::string_view a, std::string_view b, link_config cfg);
 
+    // One-way link by name, with the same config and validation as
+    // network::link_directed: a -> b uses cfg, b -> a is unchanged. An
+    // unknown name throws std::invalid_argument.
+    scenario& link_directed(std::string_view a, std::string_view b, link_config cfg);
+
     // Escape hatch: the node with this name, for handlers, timers and direct
     // sends. An unknown name throws std::invalid_argument.
     simulnetx::node& node(std::string_view name);
@@ -101,10 +106,20 @@ public:
     // std::invalid_argument.
     scenario& heal_at(std::chrono::nanoseconds t);
 
+    // Schedule a crash of the named node at virtual time t, and a restart
+    // at virtual time t. Same semantics as network::crash/restart: the
+    // node's pending timers are cancelled, its handler is preserved, and a
+    // message arriving after a restart is delivered. Names are resolved
+    // now; an unknown name throws std::invalid_argument. A time in the past
+    // throws std::invalid_argument.
+    scenario& crash_at(std::chrono::nanoseconds t, std::string_view name);
+    scenario& restart_at(std::chrono::nanoseconds t, std::string_view name);
+
     // Schedule a send at virtual time t. Names are resolved now; an unknown
     // name throws std::invalid_argument. The payload is copied now. If no
-    // link exists when the send fires, node::send throws inside run_until.
-    // A time in the past throws std::invalid_argument.
+    // link exists when the send fires, or the sender is crashed, node::send
+    // throws inside run_until. A time in the past throws
+    // std::invalid_argument.
     scenario& send_at(std::chrono::nanoseconds t, std::string_view from, std::string_view to,
                       std::string_view payload);
     scenario& send_at(std::chrono::nanoseconds t, std::string_view from, std::string_view to,
@@ -130,12 +145,10 @@ private:
     void add_node_named(std::string_view name);
     simulnetx::node& resolve_node(std::string_view name);
 
-    // Any node, for scheduling timers through node::after. Throws
-    // std::logic_error if no node exists yet.
-    simulnetx::node& timer_node();
-
-    // Schedule a callback at absolute virtual time t. Throws
-    // std::invalid_argument if t is in the past.
+    // Schedule a callback at absolute virtual time t, on a network-level
+    // timer: scheduling works even before any node exists, and is not
+    // affected by node crashes. Throws std::invalid_argument if t is in the
+    // past.
     void schedule_at(std::chrono::nanoseconds t, std::function<void()> callback);
 
     // Run a check, prefixing any assertion failure with the scenario name.
