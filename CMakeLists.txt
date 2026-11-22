@@ -9,6 +9,7 @@ add_library(simulnetx
     src/network.cxx
     src/node.cxx
     src/rng.cxx
+    src/scenario.cxx
 )
 target_include_directories(simulnetx PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
