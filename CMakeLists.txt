@@ -79,4 +79,13 @@ if(SIMULNETX_BUILD_EXAMPLES)
     else()
         target_compile_options(scenario_retry PRIVATE -Wall -Wextra -Werror)
     endif()
+
+    add_executable(failover examples/failover.cxx)
+    target_link_libraries(failover PRIVATE simulnetx)
+
+    if(MSVC)
+        target_compile_options(failover PRIVATE /W4 /WX)
+    else()
+        target_compile_options(failover PRIVATE -Wall -Wextra -Werror)
+    endif()
 endif()
