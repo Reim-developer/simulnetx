@@ -44,6 +44,31 @@ void network::link(node_id a, node_id b, link_config cfg) {
     links_[link_key(a, b)] = cfg;
 }
 
+void network::partition(std::vector<node_id> group_a, std::vector<node_id> group_b) {
+    const std::unordered_set<node_id> a(group_a.begin(), group_a.end());
+    const std::unordered_set<node_id> b(group_b.begin(), group_b.end());
+    for (const node_id id : a) {
+        if (id >= nodes_.size()) {
+            throw std::invalid_argument("simulnetx: partition references an unknown node id");
+        }
+        if (b.contains(id)) {
+            throw std::invalid_argument("simulnetx: node appears in both partition groups");
+        }
+    }
+    for (const node_id id : b) {
+        if (id >= nodes_.size()) {
+            throw std::invalid_argument("simulnetx: partition references an unknown node id");
+        }
+    }
+    partition_a_ = a;
+    partition_b_ = b;
+}
+
+void network::heal() {
+    partition_a_.clear();
+    partition_b_.clear();
+}
+
 void network::run_until(std::chrono::nanoseconds t) {
     if (t < now_) {
         throw std::invalid_argument("simulnetx: run_until target is before the current virtual time");
@@ -96,6 +121,13 @@ void network::send_from(node_id from, node_id to, std::vector<std::byte> payload
     const link_config cfg = it->second;
     ++sent_;
 
+    // Partitioned at send time: the message never enters the network, and no
+    // RNG draws are consumed for it.
+    if (partitioned_between(from, to)) {
+        ++dropped_;
+        return;
+    }
+
     // Sampling order is fixed and documented (DESIGN.md): loss, jitter, dup,
     // reorder. A draw happens only when the corresponding feature is active,
     // so enabling a feature does not change the stream of the others.
@@ -138,8 +170,19 @@ void network::schedule(std::chrono::nanoseconds time, std::function<void()> acti
 }
 
 void network::deliver(const message& msg) {
+    // Partitioned at delivery time: a message that was in flight when the
+    // partition started is lost.
+    if (partitioned_between(msg.from, msg.to)) {
+        ++dropped_;
+        return;
+    }
     ++delivered_;
     nodes_[msg.to]->deliver(msg);
+}
+
+bool network::partitioned_between(node_id a, node_id b) const {
+    return (partition_a_.contains(a) && partition_b_.contains(b)) ||
+           (partition_b_.contains(a) && partition_a_.contains(b));
 }
 
 std::chrono::nanoseconds network::sample_delay(std::chrono::nanoseconds range) {

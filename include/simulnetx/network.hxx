@@ -8,6 +8,7 @@
 #include <memory>
 #include <queue>
 #include <string>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -45,6 +46,18 @@ public:
     // Throws std::invalid_argument for unknown node ids, a self-link, or an
     // invalid config.
     void link(node_id a, node_id b, link_config cfg);
+
+    // Drop all messages between the two groups while the partition lasts
+    // (counted as dropped). Nodes in neither group are unaffected, and
+    // messages within a group still flow. A message sent while partitioned is
+    // dropped at send time; a message in flight when the partition starts is
+    // dropped at delivery time. Throws std::invalid_argument if a node id is
+    // unknown or appears in both groups.
+    void partition(std::vector<node_id> group_a, std::vector<node_id> group_b);
+
+    // End the current partition, if any. Messages dropped while partitioned
+    // stay dropped.
+    void heal();
 
     // Advance the virtual clock to t, processing all events scheduled at or
     // before t in (time, sequence) order. Throws std::invalid_argument if t
@@ -92,6 +105,8 @@ private:
     void schedule(std::chrono::nanoseconds time, std::function<void()> action);
     void deliver(const message& msg);
 
+    bool partitioned_between(node_id a, node_id b) const;
+
     // Uniform delay in [0, range] sampled from the RNG. Returns 0 when the
     // range is 0 (and draws nothing from the RNG in that case).
     std::chrono::nanoseconds sample_delay(std::chrono::nanoseconds range);
@@ -103,6 +118,8 @@ private:
 
     std::vector<std::unique_ptr<node>> nodes_;
     std::map<std::pair<node_id, node_id>, link_config> links_;
+    std::unordered_set<node_id> partition_a_;
+    std::unordered_set<node_id> partition_b_;
 
     std::priority_queue<scheduled_event, std::vector<scheduled_event>, event_later> events_;
 
