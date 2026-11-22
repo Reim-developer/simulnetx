@@ -54,3 +54,16 @@ if(SIMULNETX_BUILD_TESTS)
     include(GoogleTest)
     gtest_discover_tests(simulnetx_tests)
 endif()
+
+option(SIMULNETX_BUILD_EXAMPLES "Build simulnetx examples" ON)
+
+if(SIMULNETX_BUILD_EXAMPLES)
+    add_executable(retry_under_loss examples/retry_under_loss.cxx)
+    target_link_libraries(retry_under_loss PRIVATE simulnetx)
+
+    if(MSVC)
+        target_compile_options(retry_under_loss PRIVATE /W4 /WX)
+    else()
+        target_compile_options(retry_under_loss PRIVATE -Wall -Wextra -Werror)
+    endif()
+endif()
