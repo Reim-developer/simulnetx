@@ -68,4 +68,13 @@ if(SIMULNETX_BUILD_EXAMPLES)
     else()
         target_compile_options(retry_under_loss PRIVATE -Wall -Wextra -Werror)
     endif()
+
+    add_executable(scenario_retry examples/scenario_retry.cxx)
+    target_link_libraries(scenario_retry PRIVATE simulnetx)
+
+    if(MSVC)
+        target_compile_options(scenario_retry PRIVATE /W4 /WX)
+    else()
+        target_compile_options(scenario_retry PRIVATE -Wall -Wextra -Werror)
+    endif()
 endif()
