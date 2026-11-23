@@ -112,6 +112,18 @@ public:
     // Current virtual time.
     std::chrono::nanoseconds now() const { return now_; }
 
+    // Strict tag dispatch (default: true). When a message reaches a node
+    // that has typed handlers but no handler matches it and no on_message
+    // catch-all is registered, strict mode throws unhandled_message out of
+    // run_until; lenient mode silently ignores the message (it still
+    // counts as delivered). Nodes with no typed handlers are unaffected
+    // either way. A runtime flag, deliberately: not a macro (TU-global,
+    // fights the templates-not-macros rule) and not a template parameter
+    // on network (it would infect every type in the API). Silent dropping
+    // is the implicit behavior, so it is the opt-in.
+    void set_strict_tags(bool strict) { strict_tags_ = strict; }
+    bool strict_tags() const { return strict_tags_; }
+
     // Statistics as checkable expectations. Each expectation carries the seed
     // and the current virtual time, so a failed check reports both.
     expectation<std::size_t> sent_count() const;
@@ -180,6 +192,9 @@ private:
     std::size_t sent_{0};
     std::size_t delivered_{0};
     std::size_t dropped_{0};
+
+    // Strict tag dispatch; see set_strict_tags. Default true.
+    bool strict_tags_{true};
 };
 
 }  // namespace simulnetx

@@ -158,6 +158,11 @@ static_assert(!serializable<const char*>);
 static_assert(!serializable<void (*)()>);
 static_assert(!serializable<int tree_node::*>);
 static_assert(!serializable<bad>);
+// Arrays cannot be returned by value, so they have no serializer - and
+// the exclusion must be total, because node::send<T> is considered for
+// string literals (T = char[N]) during overload resolution.
+static_assert(!serializable<int[3]>);
+static_assert(!serializable<char[3]>);
 
 TEST(SerializerTest, TriviallyCopyableRoundTrip) {
     EXPECT_EQ(round_trip(42), 42);

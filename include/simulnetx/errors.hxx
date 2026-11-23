@@ -22,4 +22,17 @@ public:
     explicit decode_error(const std::string& message) : std::runtime_error(message) {}
 };
 
+// Thrown (in strict tag mode, the default) when a message reaches a node
+// that has typed handlers but no handler matches it and no on_message
+// catch-all is registered. The message carries the node name, the wire
+// tag, the seed and the virtual time, so the failure is reproducible.
+// Call network::set_strict_tags(false) (or scenario::lenient_tags()) to
+// ignore unmatched messages instead. Nodes with no handlers at all keep
+// silently ignoring deliveries; nodes using only on_message are
+// unaffected.
+class unhandled_message : public std::runtime_error {
+public:
+    explicit unhandled_message(const std::string& message) : std::runtime_error(message) {}
+};
+
 }  // namespace simulnetx

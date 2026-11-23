@@ -3,6 +3,9 @@
 #include <stdexcept>
 #include <utility>
 
+#include "simulnetx/errors.hxx"
+#include "simulnetx/serializer.hxx"
+
 namespace simulnetx {
 
 namespace {
@@ -261,7 +264,30 @@ void network::deliver(const message& msg) {
         return;
     }
     ++delivered_;
-    nodes_[msg.to]->deliver(msg);
+    if (nodes_[msg.to]->deliver(msg)) {
+        return;
+    }
+    // No handler consumed the message. Strict mode throws, but only for
+    // nodes that opted into typed dispatch: a node with no typed handlers
+    // keeps the v0.1.0 behavior (silently ignore, still counted).
+    if (!strict_tags_ || !nodes_[msg.to]->has_typed_handlers()) {
+        return;
+    }
+    const node& dest = *nodes_[msg.to];
+    std::string tag_description = "no type tag (payload too short: " +
+                                  std::to_string(msg.payload.size()) + " bytes)";
+    if (msg.payload.size() >= sizeof(std::uint64_t)) {
+        tag_description = "tag " + std::to_string(detail::read_u64(msg.payload.data()));
+    }
+    throw unhandled_message("simulnetx: unhandled_message: node '" + dest.name() +
+                            "' received a message with " + tag_description +
+                            " that no on<T> handler matches and no on_message catch-all is "
+                            "registered (seed " +
+                            std::to_string(seed_) + ", t=" +
+                            std::to_string(now_.count()) +
+                            "ns). Register on<T> for the type, add an on_message catch-all, "
+                            "or call network::set_strict_tags(false) to ignore unmatched "
+                            "messages.");
 }
 
 bool network::partitioned_between(node_id a, node_id b) const {

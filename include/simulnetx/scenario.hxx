@@ -129,6 +129,15 @@ public:
     // std::invalid_argument.
     scenario& on_message(std::string_view name, std::function<void(const message&)> handler);
 
+    // Strict tag dispatch on the underlying network (default: strict).
+    // lenient_tags() opts into silently ignoring messages that no on<T>
+    // handler matches; strict_tags() restores the default. Unlike seed(),
+    // these may be called at any point in the chain: the flag is stored
+    // and applied when the network is created, or immediately if it
+    // already exists.
+    scenario& strict_tags();
+    scenario& lenient_tags();
+
     // Exact-count checks, delegating to the network's expectation API. Each
     // returns scenario& so checks chain. A failure throws
     // simulnetx::assertion_failed with the scenario name prefixed:
@@ -163,6 +172,7 @@ private:
 
     std::string name_;
     std::uint64_t seed_{0};
+    bool strict_tags_{true};
     std::unique_ptr<simulnetx::network> net_;
     // Transparent comparator so lookups take string_view without copying.
     std::map<std::string, simulnetx::node*, std::less<>> nodes_;

@@ -172,6 +172,11 @@ enum class serializer_kind { none, reflect, memcpy };
 // memcpy for everything else trivially copyable. Pointers and member
 // pointers are never serialized: an address is meaningless in a decoded
 // value, so they are excluded even though they are trivially copyable.
+// Arrays are excluded too: they cannot be returned by value, so the
+// generic partial's decode would be ill-formed - and the exclusion must
+// live here, because node::send<T> is considered for string literals
+// (T = char[N]) during overload resolution, where a hard error inside the
+// serializable concept would break the raw string_view overload.
 template <typename T>
 consteval serializer_kind kind_of() {
     if constexpr (is_builtin_container_v<T>) {
@@ -179,7 +184,7 @@ consteval serializer_kind kind_of() {
     } else if constexpr (reflect::reflectable<T>) {
         return serializer_kind::reflect;
     } else if constexpr (std::is_trivially_copyable_v<T> && !std::is_pointer_v<T> &&
-                         !std::is_member_pointer_v<T>) {
+                         !std::is_member_pointer_v<T> && !std::is_array_v<T>) {
         return serializer_kind::memcpy;
     } else {
         return serializer_kind::none;

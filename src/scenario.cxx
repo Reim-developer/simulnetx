@@ -110,6 +110,22 @@ scenario& scenario::on_message(std::string_view name,
     return *this;
 }
 
+scenario& scenario::strict_tags() {
+    strict_tags_ = true;
+    if (net_ != nullptr) {
+        net_->set_strict_tags(true);
+    }
+    return *this;
+}
+
+scenario& scenario::lenient_tags() {
+    strict_tags_ = false;
+    if (net_ != nullptr) {
+        net_->set_strict_tags(false);
+    }
+    return *this;
+}
+
 scenario& scenario::expect_sent(std::size_t n) {
     check([this, n] { ensure_network().sent_count().equal(n); });
     return *this;
@@ -155,6 +171,7 @@ void scenario::schedule_at(std::chrono::nanoseconds t, std::function<void()> cal
 simulnetx::network& scenario::ensure_network() {
     if (net_ == nullptr) {
         net_ = std::make_unique<simulnetx::network>(seed_);
+        net_->set_strict_tags(strict_tags_);
     }
     return *net_;
 }
