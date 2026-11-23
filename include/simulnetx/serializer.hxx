@@ -68,6 +68,18 @@ std::uint64_t type_tag() {
     return tag;
 }
 
+// Envelope kind tags for the request/response engine: FNV-1a of string
+// literals, so they are stable across compilers (unlike typeid-based
+// tags). A request envelope is [request_envelope_tag][request_id]
+// [req_tag][payload]; a response is [response_envelope_tag][request_id]
+// [resp_tag][payload]. The kind tag is what lets a node tell a request
+// from a response: without it, a request whose id collides with a pending
+// id on the receiver would be misrouted as a response (request ids are
+// per-node, so every node's first request is id 0), and a self-request
+// would always misroute.
+constexpr std::uint64_t request_envelope_tag = fnv1a_64("simulnetx::request");
+constexpr std::uint64_t response_envelope_tag = fnv1a_64("simulnetx::response");
+
 // Appending helpers for the encode side. All appends are to the caller's
 // vector; nothing here allocates on its own.
 inline void append_bytes(std::vector<std::byte>& out, const std::byte* data,

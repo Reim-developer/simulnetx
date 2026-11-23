@@ -18,6 +18,8 @@
 #include "simulnetx/message.hxx"
 #include "simulnetx/network.hxx"
 #include "simulnetx/node.hxx"
+#include "simulnetx/request.hxx"
+#include "simulnetx/serializer.hxx"
 
 namespace simulnetx {
 
@@ -128,6 +130,25 @@ public:
     // Set the message handler on the named node. An unknown name throws
     // std::invalid_argument.
     scenario& on_message(std::string_view name, std::function<void(const message&)> handler);
+
+    // Register a server on the named node: each request of type Req is
+    // decoded, passed to the handler, and the returned Resp is sent back
+    // to the requester. An unknown name throws std::invalid_argument.
+    template <serializable Req, serializable Resp>
+    scenario& serve(std::string_view name, std::function<Resp(const Req&)> handler) {
+        resolve_node(name).serve<Req, Resp>(std::move(handler));
+        return *this;
+    }
+
+    // Send a typed request from one named node to another, returning the
+    // handle for retries, a timeout, and the callbacks. The first request
+    // fires immediately. Unknown names throw std::invalid_argument; no
+    // link throws std::invalid_argument from the send.
+    template <serializable Req, serializable Resp>
+    request_handle<Req, Resp> request(std::string_view from, std::string_view to,
+                                      const Req& req) {
+        return resolve_node(from).request<Req, Resp>(resolve_node(to).id(), req);
+    }
 
     // Strict tag dispatch on the underlying network (default: strict).
     // lenient_tags() opts into silently ignoring messages that no on<T>

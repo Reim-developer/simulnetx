@@ -96,6 +96,10 @@ void network::crash(node_id id) {
     // callbacks check the generation at fire time and no-op on mismatch.
     // No RNG draws are consumed.
     ++generations_[id];
+    // Pending requests are cancelled silently: a dead node's callbacks
+    // must not fire, and its retry/timeout timers are already cancelled
+    // by the generation bump above.
+    nodes_[id]->cancel_pending_requests();
 }
 
 void network::restart(node_id id) {
