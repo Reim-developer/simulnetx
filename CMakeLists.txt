@@ -93,4 +93,13 @@ if(SIMULNETX_BUILD_EXAMPLES)
     else()
         target_compile_options(failover PRIVATE -Wall -Wextra -Werror)
     endif()
+
+    add_executable(typed_ping_pong examples/typed_ping_pong.cxx)
+    target_link_libraries(typed_ping_pong PRIVATE simulnetx)
+
+    if(MSVC)
+        target_compile_options(typed_ping_pong PRIVATE /W4 /WX)
+    else()
+        target_compile_options(typed_ping_pong PRIVATE -Wall -Wextra -Werror)
+    endif()
 endif()
