@@ -47,6 +47,7 @@ if(SIMULNETX_BUILD_TESTS)
         tests/reflect_test.cxx
         tests/rng_test.cxx
         tests/scenario_test.cxx
+        tests/serializer_test.cxx
     )
     target_link_libraries(simulnetx_tests PRIVATE simulnetx GTest::gtest_main)
 
