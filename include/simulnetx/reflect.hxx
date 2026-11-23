@@ -55,24 +55,47 @@ constexpr bool paren_constructible(std::index_sequence<Is...>) {
     return std::is_constructible_v<T, decltype((static_cast<void>(Is), any_value{}))...>;
 }
 
-template <typename T, std::size_t... Is>
-consteval std::size_t count_paren_impl(std::index_sequence<Is...>) {
-    constexpr bool checks[] = {paren_constructible<T>(std::make_index_sequence<Is>{})...};
+// One chunk of the paren probe: the largest N in [Begin, Begin + sizeof...(Is))
+// for which T is constructible from N probe arguments, or 0 if none is. The
+// scan is chunked so no single consteval evaluation holds more than 32
+// arities: MSVC errors C1202 ("recursive type or function dependency
+// context too complex") on the 202-wide initializer list, while the
+// 66-wide list passed; 32 is comfortably inside.
+template <typename T, std::size_t Begin, std::size_t... Is>
+consteval std::size_t count_paren_chunk(std::index_sequence<Is...>) {
+    constexpr bool checks[] = {paren_constructible<T>(std::make_index_sequence<Begin + Is>{})...};
     std::size_t result = 0;
     for (std::size_t i = 0; i < sizeof...(Is); ++i) {
         if (checks[i]) {
-            result = i;
+            result = Begin + i;
         }
-    }
-    if (result == 1 && std::is_empty_v<T>) {
-        return 0;
     }
     return result;
 }
 
 template <typename T>
 consteval std::size_t count_paren() {
-    return count_paren_impl<T>(std::make_index_sequence<202>{});
+    // 202 arities in 7 chunks of at most 32. Every arity is probed exactly
+    // once, in exactly one chunk; the max over chunks is the count.
+    constexpr std::size_t chunks[] = {
+        count_paren_chunk<T, 0>(std::make_index_sequence<32>{}),
+        count_paren_chunk<T, 32>(std::make_index_sequence<32>{}),
+        count_paren_chunk<T, 64>(std::make_index_sequence<32>{}),
+        count_paren_chunk<T, 96>(std::make_index_sequence<32>{}),
+        count_paren_chunk<T, 128>(std::make_index_sequence<32>{}),
+        count_paren_chunk<T, 160>(std::make_index_sequence<32>{}),
+        count_paren_chunk<T, 192>(std::make_index_sequence<10>{}),
+    };
+    std::size_t result = 0;
+    for (const std::size_t chunk : chunks) {
+        if (chunk > result) {
+            result = chunk;
+        }
+    }
+    if (result == 1 && std::is_empty_v<T>) {
+        return 0;
+    }
+    return result;
 }
 
 // Single-arity braced check, for reference detection only. The arity is
