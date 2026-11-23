@@ -56,11 +56,14 @@ constexpr bool paren_constructible(std::index_sequence<Is...>) {
 }
 
 // One chunk of the paren probe: the largest N in [Begin, Begin + sizeof...(Is))
-// for which T is constructible from N probe arguments, or 0 if none is. The
-// scan is chunked so no single consteval evaluation holds more than 32
-// arities: MSVC errors C1202 ("recursive type or function dependency
-// context too complex") on the 202-wide initializer list, while the
-// 66-wide list passed; 32 is comfortably inside.
+// for which T is constructible from N probe arguments, or 0 if none is.
+// The scan is chunked into 32-arity pieces AND each piece is evaluated in
+// its own variable-template instantiation (count_paren_chunk_v below):
+// MSVC errors C1202 ("recursive type or function dependency context too
+// complex") on the 202-wide initializer list, and chunking alone does not
+// help — calling the chunks directly from count_paren keeps all 224 checks
+// in one evaluation context (CI run #23 failed inside the first 32-wide
+// chunk). Only the separate instantiation units keep each context small.
 template <typename T, std::size_t Begin, std::size_t... Is>
 consteval std::size_t count_paren_chunk(std::index_sequence<Is...>) {
     constexpr bool checks[] = {paren_constructible<T>(std::make_index_sequence<Begin + Is>{})...};
@@ -73,18 +76,30 @@ consteval std::size_t count_paren_chunk(std::index_sequence<Is...>) {
     return result;
 }
 
+// Each chunk's value lives in its own variable-template instantiation.
+// MSVC's C1202 limit ("recursive type or function dependency context too
+// complex") counts the whole consteval evaluation rooted at count_paren,
+// so calling the chunk functions directly from count_paren keeps all 224
+// checks in one context and fails even though each chunk is only 32 wide
+// (proven by CI run #23: C1202 inside the first 32-wide chunk). A variable
+// template is a separate instantiation unit, so each unit holds at most
+// 32 checks.
+template <typename T, std::size_t Begin, std::size_t Count>
+inline constexpr std::size_t count_paren_chunk_v =
+    count_paren_chunk<T, Begin>(std::make_index_sequence<Count>{});
+
 template <typename T>
 consteval std::size_t count_paren() {
     // 202 arities in 7 chunks of at most 32. Every arity is probed exactly
     // once, in exactly one chunk; the max over chunks is the count.
     constexpr std::size_t chunks[] = {
-        count_paren_chunk<T, 0>(std::make_index_sequence<32>{}),
-        count_paren_chunk<T, 32>(std::make_index_sequence<32>{}),
-        count_paren_chunk<T, 64>(std::make_index_sequence<32>{}),
-        count_paren_chunk<T, 96>(std::make_index_sequence<32>{}),
-        count_paren_chunk<T, 128>(std::make_index_sequence<32>{}),
-        count_paren_chunk<T, 160>(std::make_index_sequence<32>{}),
-        count_paren_chunk<T, 192>(std::make_index_sequence<10>{}),
+        count_paren_chunk_v<T, 0, 32>,
+        count_paren_chunk_v<T, 32, 32>,
+        count_paren_chunk_v<T, 64, 32>,
+        count_paren_chunk_v<T, 96, 32>,
+        count_paren_chunk_v<T, 128, 32>,
+        count_paren_chunk_v<T, 160, 32>,
+        count_paren_chunk_v<T, 192, 10>,
     };
     std::size_t result = 0;
     for (const std::size_t chunk : chunks) {
