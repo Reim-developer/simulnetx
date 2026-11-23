@@ -31,26 +31,21 @@ namespace simulnetx::reflect {
 
 namespace detail {
 
-// Probe types. any_value converts to any value type (as a prvalue); it
-// cannot initialize a reference member, because a prvalue does not bind to
-// a non-const lvalue reference. any_lvalue converts to any lvalue reference
-// and CAN initialize reference members. Comparing the two counts is how
-// reference members are detected (see has_reference_field).
+// Probe type. any_value converts to any value type (as a prvalue); it
+// cannot initialize a non-const reference member, because a prvalue does
+// not bind to a non-const lvalue reference - and a reference member cannot
+// be value-initialized either. That is what the braced reference check
+// below relies on (see braced_constructible_at).
 struct any_value {
     template <typename T>
     constexpr operator T() const noexcept;
 };
 
-struct any_lvalue {
-    template <typename T>
-    constexpr operator T&() const noexcept;
-};
-
 // Field count probe: direct (paren) initialization, which - unlike braced
 // init - does not apply brace elision, so nested aggregates count as one
 // field each. std::is_constructible uses direct init. The count is the
-// largest N in [0, 65] for which T is constructible from N probe arguments;
-// 65 means "more than 64 fields" and is never a valid count.
+// largest N in [0, 201] for which T is constructible from N probe arguments;
+// 201 means "more than 200 fields" and is never a valid count.
 //
 // Caveat: N == 1 is polluted by the copy/move constructor (any_value
 // converts to T itself), so a 1-count on an empty type really means 0
@@ -77,46 +72,36 @@ consteval std::size_t count_paren_impl(std::index_sequence<Is...>) {
 
 template <typename T>
 consteval std::size_t count_paren() {
-    return count_paren_impl<T>(std::make_index_sequence<66>{});
+    return count_paren_impl<T>(std::make_index_sequence<202>{});
 }
 
-// Braced-init count, for reference detection only. Braced init has no
-// copy-ctor pollution, and elision inflates both probe counts equally, so
-// the comparison below is meaningful even though the absolute braced count
-// is not the field count (arrays and nested aggregates elide).
-template <typename Any, typename T, std::size_t... Is>
-consteval bool braced_constructible(std::index_sequence<Is...>) {
-    return requires { T{(static_cast<void>(Is), Any{})...}; };
+// Single-arity braced check, for reference detection only. The arity is
+// the paren count: for a struct without reference members, braced init
+// from that many prvalue probes succeeds; for a struct with a (non-const)
+// reference member it fails, because a prvalue cannot initialize the
+// reference. Braced init has no copy-ctor pollution - unlike paren init,
+// where N == 1 succeeds through the copy constructor for any copyable
+// struct - so the braced check sees what the paren count hides.
+//
+// This is ONE requires-expression, not a 66-wide scan: an earlier version
+// scanned all arities with braced init and MSVC rejected it with C1202
+// (recursive dependency context too complex). And there is deliberately
+// no lvalue probe: clang 18 ICEs on the paren form with an lvalue probe
+// (crash in CXXParenListInitExpr::computeDependence for a struct with a
+// move-only member).
+template <typename T, std::size_t... Is>
+consteval bool braced_constructible_at(std::index_sequence<Is...>) {
+    return requires { T{(static_cast<void>(Is), any_value{})...}; };
 }
 
-template <typename Any, typename T, std::size_t... Is>
-consteval std::size_t count_braced_impl(std::index_sequence<Is...>) {
-    constexpr bool checks[] = {braced_constructible<Any, T>(std::make_index_sequence<Is>{})...};
-    std::size_t result = 0;
-    for (std::size_t i = 0; i < sizeof...(Is); ++i) {
-        if (checks[i]) {
-            result = i;
-        }
-    }
-    return result;
-}
-
-template <typename Any, typename T>
-consteval std::size_t count_braced() {
-    return count_braced_impl<Any, T>(std::make_index_sequence<66>{});
-}
-
-// True iff T has a non-const reference member. any_value cannot initialize
-// one (and cannot value-initialize one either), so every braced count with
-// any_value fails and that count is 0; any_lvalue can, so its count is the
-// (elision-inflated) field count. For reference-free structs the two counts
-// are equal: move-only members only shrink the any_lvalue count, never grow
-// it. Const reference members are NOT detected here (a prvalue binds to a
-// const reference); they are caught by has_reference_field_decltype_v, the
-// serializer backstop.
+// True iff T has a non-const reference member. A prvalue cannot initialize
+// one, so braced init from the paren count's worth of prvalue probes fails
+// exactly when such a member is present. Const reference members are NOT
+// detected here (a prvalue binds to a const reference); they are caught by
+// has_reference_field_decltype_v, the serializer backstop.
 template <typename T>
 consteval bool has_reference_field() {
-    return count_braced<any_lvalue, T>() > count_braced<any_value, T>();
+    return !braced_constructible_at<T>(std::make_index_sequence<count_paren<T>()>{});
 }
 
 // Decltype-based reference detection (generated per-arity machinery): the
@@ -127,45 +112,51 @@ consteval bool has_reference_field() {
 // (the serializer's static_assert), never inside the reflectable concept,
 // which has to stay total.
 //
-// The arity for the binding is the max of the paren count and the
-// braced-lvalue count: the paren count undercounts structs with reference
-// members (plain any cannot initialize them), while the braced-lvalue
-// count gets those right; for every non-array struct the max is the true
-// count. (For C-array structs both counts are wrong and the binding fails
-// loudly, which is the documented behavior there.)
-template <typename T>
-consteval std::size_t count_for_backstop() {
-    const std::size_t paren = count_paren<T>();
-    const std::size_t braced = count_braced<any_lvalue, T>();
-    return paren > braced ? paren : braced;
-}
-
+// The arity is the paren count: for const-reference members - the case
+// this backstop exists for - the prvalue probe binds, so the count is the
+// true field count. For non-const references the count is 0, but those
+// structs never reach the serializer: the concept excludes them (a
+// non-const reference member makes the count 0, and the concept requires
+// a positive count for non-empty types).
 template <typename T>
 constexpr bool has_reference_field_decltype_v =
     decltype(has_reference_field_tag(
         std::declval<T&>(),
-        std::integral_constant<std::size_t, count_for_backstop<T>()>{}))::value;
+        std::integral_constant<std::size_t, count_paren<T>()>{}))::value;
 
 }  // namespace detail
 
 // An aggregate the reflection engine can decompose: no base classes with
 // data members alongside derived members (structured bindings cannot
 // decompose those - a loud compile error if attempted), no unions, no
-// arrays as the type itself, at most 64 fields, no (non-const) reference
+// arrays as the type itself, at most 200 fields, no (non-const) reference
 // members. A struct with a C-style array member may still satisfy this
 // concept while its count is wrong; using to_tuple/get/for_each_field on
 // one fails at compile time with a structured-binding count mismatch.
 // Const reference members satisfy this concept too; the serializer rejects
 // them separately (see serializer.hxx).
+//
+// Reference members are rejected through the braced check
+// (has_reference_field): a prvalue cannot initialize a non-const reference,
+// so braced init from the paren count's worth of prvalue probes fails
+// exactly when such a member is present. One hole: a reference member WITH
+// a default member initializer, not in first position, passes the braced
+// check (the members before it initialize from probes, the reference takes
+// its default) and satisfies the concept - using to_tuple or the serializer
+// on such a struct then fails at compile time with a structured-binding
+// count mismatch, because the probed count is the reference's position, not
+// the field count. No value-based probe can close this hole (see the note
+// on braced_constructible_at above); a struct with a defaulted reference
+// member is not a sensible message type.
 template <typename T>
 concept reflectable =
     std::is_aggregate_v<T> && !std::is_union_v<T> && !std::is_array_v<T> &&
-    (detail::count_paren<T>() <= 64) &&
+    (detail::count_paren<T>() <= 200) &&
     (detail::count_paren<T>() > 0 || std::is_empty_v<T>) &&
     !detail::has_reference_field<T>();
 
-// Number of fields of an aggregate. Returns 65 for aggregates with more
-// than 64 fields (the probe range is 0..65, so 65 means "over the cap").
+// Number of fields of an aggregate. Returns 201 for aggregates with more
+// than 200 fields (the probe range is 0..201, so 201 means "over the cap").
 template <typename T>
 consteval std::size_t field_count() {
     static_assert(std::is_aggregate_v<T>,
@@ -181,7 +172,7 @@ constexpr auto to_tuple(T&& obj) {
     static_assert(reflectable<std::remove_cvref_t<T>>,
                   "simulnetx::reflect::to_tuple requires a reflectable aggregate: "
                   "no base classes with members, no unions, no reference members, "
-                  "at most 64 fields, and no C-style array members (use std::array)");
+                  "at most 200 fields, and no C-style array members (use std::array)");
     constexpr std::size_t n = field_count<std::remove_cvref_t<T>>();
     return detail::to_tuple_impl(std::forward<T>(obj), std::integral_constant<std::size_t, n>{});
 }

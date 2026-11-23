@@ -203,9 +203,9 @@ template <> struct simulnetx::serializer<money> {
 ```
 
 The reflection engine is public too: `simulnetx::reflect::field_count`,
-`get`, `for_each_field` and `to_tuple` work on any aggregate up to 64
+`get`, `for_each_field` and `to_tuple` work on any aggregate up to 200
 fields. Limits: no C-array members (use `std::array`), no reference
-members, no base classes with members, no more than 64 fields. Each limit
+members, no base classes with members, no more than 200 fields. Each limit
 fails loudly at compile time.
 
 ## Request/response
