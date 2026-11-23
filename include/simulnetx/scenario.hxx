@@ -84,6 +84,19 @@ public:
     // unknown name throws std::invalid_argument.
     scenario& link_directed(std::string_view a, std::string_view b, link_config cfg);
 
+    // Topology shorthand, operating on the nodes added so far, in
+    // insertion order. Each links every pair it covers with the same
+    // config (both directions, like link). mesh() links all pairs;
+    // mesh(names) links all pairs among the named nodes; star(hub) links
+    // the hub to every other node; chain() links consecutive nodes in
+    // insertion order (i <-> i+1). Throw std::logic_error on insufficient
+    // nodes (mesh/chain need >= 2, star needs the hub plus >= 1 other)
+    // and std::invalid_argument for an unknown name.
+    scenario& mesh(link_config cfg);
+    scenario& mesh(std::vector<std::string_view> names, link_config cfg);
+    scenario& star(std::string_view hub, link_config cfg);
+    scenario& chain(link_config cfg);
+
     // Escape hatch: the node with this name, for handlers, timers and direct
     // sends. An unknown name throws std::invalid_argument.
     simulnetx::node& node(std::string_view name);
@@ -197,6 +210,9 @@ private:
     std::unique_ptr<simulnetx::network> net_;
     // Transparent comparator so lookups take string_view without copying.
     std::map<std::string, simulnetx::node*, std::less<>> nodes_;
+    // Nodes in insertion order (the map above is name-ordered): chain()
+    // links consecutive nodes in the order they were added.
+    std::vector<simulnetx::node*> node_order_;
 };
 
 }  // namespace simulnetx

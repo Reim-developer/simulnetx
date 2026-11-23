@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <stdexcept>
+#include <string>
 #include <utility>
 
 namespace simulnetx {
@@ -26,6 +27,70 @@ scenario& scenario::link_directed(std::string_view a, std::string_view b, link_c
     const node_id a_id = resolve_node(a).id();
     const node_id b_id = resolve_node(b).id();
     ensure_network().link_directed(a_id, b_id, cfg);
+    return *this;
+}
+
+scenario& scenario::mesh(link_config cfg) {
+    if (node_order_.size() < 2) {
+        throw std::logic_error("simulnetx: scenario '" + name_ +
+                               "': mesh() needs at least 2 nodes, has " +
+                               std::to_string(node_order_.size()));
+    }
+    simulnetx::network& net = ensure_network();
+    for (std::size_t i = 0; i < node_order_.size(); ++i) {
+        for (std::size_t j = i + 1; j < node_order_.size(); ++j) {
+            net.link(node_order_[i]->id(), node_order_[j]->id(), cfg);
+        }
+    }
+    return *this;
+}
+
+scenario& scenario::mesh(std::vector<std::string_view> names, link_config cfg) {
+    if (names.size() < 2) {
+        throw std::logic_error("simulnetx: scenario '" + name_ +
+                               "': mesh() needs at least 2 nodes, has " +
+                               std::to_string(names.size()));
+    }
+    std::vector<node_id> ids;
+    ids.reserve(names.size());
+    for (const std::string_view name : names) {
+        ids.push_back(resolve_node(name).id());
+    }
+    simulnetx::network& net = ensure_network();
+    for (std::size_t i = 0; i < ids.size(); ++i) {
+        for (std::size_t j = i + 1; j < ids.size(); ++j) {
+            net.link(ids[i], ids[j], cfg);
+        }
+    }
+    return *this;
+}
+
+scenario& scenario::star(std::string_view hub, link_config cfg) {
+    simulnetx::node& hub_node = resolve_node(hub);
+    if (node_order_.size() < 2) {
+        throw std::logic_error("simulnetx: scenario '" + name_ +
+                               "': star() needs a hub plus at least 1 other node, has " +
+                               std::to_string(node_order_.size()) + " node(s)");
+    }
+    simulnetx::network& net = ensure_network();
+    for (const simulnetx::node* other : node_order_) {
+        if (other != &hub_node) {
+            net.link(hub_node.id(), other->id(), cfg);
+        }
+    }
+    return *this;
+}
+
+scenario& scenario::chain(link_config cfg) {
+    if (node_order_.size() < 2) {
+        throw std::logic_error("simulnetx: scenario '" + name_ +
+                               "': chain() needs at least 2 nodes, has " +
+                               std::to_string(node_order_.size()));
+    }
+    simulnetx::network& net = ensure_network();
+    for (std::size_t i = 0; i + 1 < node_order_.size(); ++i) {
+        net.link(node_order_[i]->id(), node_order_[i + 1]->id(), cfg);
+    }
     return *this;
 }
 
@@ -183,6 +248,7 @@ void scenario::add_node_named(std::string_view name) {
     }
     simulnetx::node& created = ensure_network().add_node(std::string(name));
     nodes_.emplace(std::string(name), &created);
+    node_order_.push_back(&created);
 }
 
 simulnetx::node& scenario::resolve_node(std::string_view name) {
