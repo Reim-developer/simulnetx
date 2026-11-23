@@ -6,6 +6,16 @@
 #include <type_traits>
 #include <utility>
 
+namespace simulnetx::reflect::detail {
+
+// Forward declaration: the generated header's count_arity_impl overloads
+// constrain on this probe, and the generated header is included before
+// the probe is defined below.
+template <typename T, std::size_t... Is>
+constexpr bool paren_constructible(std::index_sequence<Is...>);
+
+}  // namespace simulnetx::reflect::detail
+
 #include "simulnetx/detail/reflect_generated.hxx"
 
 namespace simulnetx::reflect {
@@ -55,63 +65,44 @@ constexpr bool paren_constructible(std::index_sequence<Is...>) {
     return std::is_constructible_v<T, decltype((static_cast<void>(Is), any_value{}))...>;
 }
 
-// One chunk of the paren probe: the largest N in [Begin, Begin + sizeof...(Is))
-// for which T is constructible from N probe arguments, or 0 if none is.
-// The scan is chunked into 32-arity pieces AND each piece is evaluated in
-// its own variable-template instantiation (count_paren_chunk_v below):
-// MSVC errors C1202 ("recursive type or function dependency context too
-// complex") on the 202-wide initializer list, and chunking alone does not
-// help — calling the chunks directly from count_paren keeps all 224 checks
-// in one evaluation context (CI run #23 failed inside the first 32-wide
-// chunk). Only the separate instantiation units keep each context small.
-template <typename T, std::size_t Begin, std::size_t... Is>
-consteval std::size_t count_paren_chunk(std::index_sequence<Is...>) {
-    constexpr bool checks[] = {paren_constructible<T>(std::make_index_sequence<Begin + Is>{})...};
-    std::size_t result = 0;
-    for (std::size_t i = 0; i < sizeof...(Is); ++i) {
-        if (checks[i]) {
-            result = Begin + i;
-        }
-    }
-    return result;
-}
-
-// Each chunk's value lives in its own variable-template instantiation.
-// MSVC's C1202 limit ("recursive type or function dependency context too
-// complex") counts the whole consteval evaluation rooted at count_paren,
-// so calling the chunk functions directly from count_paren keeps all 224
-// checks in one context and fails even though each chunk is only 32 wide
-// (proven by CI run #23: C1202 inside the first 32-wide chunk). A variable
-// template is a separate instantiation unit, so each unit holds at most
-// 32 checks.
-template <typename T, std::size_t Begin, std::size_t Count>
-inline constexpr std::size_t count_paren_chunk_v =
-    count_paren_chunk<T, Begin>(std::make_index_sequence<Count>{});
-
+// Field count, via overload resolution over the generated per-arity
+// probes (count_arity_impl in reflect_generated.hxx): each overload is
+// viable iff T is constructible from that many probes, and the
+// priority_tag ranking picks the highest viable arity — which is the
+// field count, because the probe predicate is true exactly on the
+// interval [j, k] (j = first index whose suffix is all
+// default-constructible, k = field count), so its maximum is k.
+//
+// Why overload resolution, not a scan: the count is the maximum of a
+// 202-wide probe, and MSVC errors C1202 ("recursive type or function
+// dependency context too complex") when all 202 probes are evaluated
+// inside one consteval function — proven three ways (CI runs #22–#24):
+// a flat 202-wide fold, 32-wide chunks called directly, and 32-wide
+// chunks behind variable templates all failed inside the first chunk
+// for a type with non-default-constructible members
+// (with_nodefault_members), while a 200-field all-int type passed the
+// same scan. Overload resolution evaluates each candidate's constraint
+// in its own SFINAE context, so no single evaluation holds more than
+// one probe. (Binary search is unsound here: the predicate is false
+// below j, so a search can miss the interval entirely.)
 template <typename T>
 consteval std::size_t count_paren() {
-    // 202 arities in 7 chunks of at most 32. Every arity is probed exactly
-    // once, in exactly one chunk; the max over chunks is the count.
-    constexpr std::size_t chunks[] = {
-        count_paren_chunk_v<T, 0, 32>,
-        count_paren_chunk_v<T, 32, 32>,
-        count_paren_chunk_v<T, 64, 32>,
-        count_paren_chunk_v<T, 96, 32>,
-        count_paren_chunk_v<T, 128, 32>,
-        count_paren_chunk_v<T, 160, 32>,
-        count_paren_chunk_v<T, 192, 10>,
-    };
-    std::size_t result = 0;
-    for (const std::size_t chunk : chunks) {
-        if (chunk > result) {
-            result = chunk;
-        }
-    }
-    if (result == 1 && std::is_empty_v<T>) {
+    // priority_tag<201> must match the generator's cap + 1 (see
+    // tools/generate_reflect.py): 201 is the "over the cap" sentinel.
+    constexpr std::size_t found =
+        decltype(count_arity_impl<T>(priority_tag<201>{}))::value;
+    if (found == 1 && std::is_empty_v<T>) {
         return 0;
     }
-    return result;
+    return found;
 }
+
+// Memoized per-type count: the concept, field_count,
+// has_reference_field and the serializer backstop all need it, and each
+// evaluation is an overload resolution over 202 candidates. One
+// evaluation per type per translation unit.
+template <typename T>
+inline constexpr std::size_t count_paren_v = count_paren<T>();
 
 // Single-arity braced check, for reference detection only. The arity is
 // the paren count: for a struct without reference members, braced init
@@ -139,7 +130,7 @@ consteval bool braced_constructible_at(std::index_sequence<Is...>) {
 // has_reference_field_decltype_v, the serializer backstop.
 template <typename T>
 consteval bool has_reference_field() {
-    return !braced_constructible_at<T>(std::make_index_sequence<count_paren<T>()>{});
+    return !braced_constructible_at<T>(std::make_index_sequence<count_paren_v<T>>{});
 }
 
 // Decltype-based reference detection (generated per-arity machinery): the
@@ -160,7 +151,7 @@ template <typename T>
 constexpr bool has_reference_field_decltype_v =
     decltype(has_reference_field_tag(
         std::declval<T&>(),
-        std::integral_constant<std::size_t, count_paren<T>()>{}))::value;
+        std::integral_constant<std::size_t, count_paren_v<T>>{}))::value;
 
 }  // namespace detail
 
@@ -189,8 +180,8 @@ constexpr bool has_reference_field_decltype_v =
 template <typename T>
 concept reflectable =
     std::is_aggregate_v<T> && !std::is_union_v<T> && !std::is_array_v<T> &&
-    (detail::count_paren<T>() <= 200) &&
-    (detail::count_paren<T>() > 0 || std::is_empty_v<T>) &&
+    (detail::count_paren_v<T> <= 200) &&
+    (detail::count_paren_v<T> > 0 || std::is_empty_v<T>) &&
     !detail::has_reference_field<T>();
 
 // Number of fields of an aggregate. Returns 201 for aggregates with more
@@ -199,7 +190,7 @@ template <typename T>
 consteval std::size_t field_count() {
     static_assert(std::is_aggregate_v<T>,
                   "simulnetx::reflect::field_count requires an aggregate type");
-    return detail::count_paren<T>();
+    return detail::count_paren_v<T>;
 }
 
 // The fields of obj as a tuple of references, in declaration order.

@@ -6,8 +6,11 @@
 // to_tuple_impl decomposes an aggregate into a tuple of references,
 // and has_reference_field_tag detects reference members via decltype
 // of the bindings (a reference member's binding has reference type,
-// a value member's does not). Both are needed because structured
-// bindings cannot be indexed: each arity needs its own spelling.
+// a value member's does not). count_arity_impl probes the field count:
+// one overload per arity, viable iff T is constructible from that many
+// probes, ranked by priority_tag so the highest viable arity wins.
+// All three families exist because neither structured bindings nor the
+// arity probe can be indexed: each arity needs its own spelling.
 
 #pragma once
 
@@ -17,6 +20,25 @@
 #include <utility>
 
 namespace simulnetx::reflect::detail {
+
+// Overload-rank tags for field counting: priority_tag<N> derives from
+// priority_tag<N-1>, so a call with priority_tag<CAP+1> prefers the
+// viable count_arity_impl overload with the highest N (a conversion to
+// a more-derived base beats one to a less-derived base), and the
+// highest viable N is the field count.
+struct priority_tag_base {};
+template <std::size_t N>
+struct priority_tag : priority_tag<N - 1> {};
+template <>
+struct priority_tag<0> : priority_tag_base {};
+
+// Fallback: no arity probe accepted T (a non-const reference member makes
+// every probe fail). Returns 0 so counting stays total; the reflectable
+// concept rejects such types on the count. priority_tag_base sits below
+// every priority_tag<N>, so this overload wins only when no arity
+// overload is viable.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 0> count_arity_impl(priority_tag_base);
 
 // Arity 0: decompose into a tuple of references.
 template <typename T>
@@ -3227,5 +3249,1217 @@ constexpr auto has_reference_field_tag(T&, std::integral_constant<std::size_t, 2
            (void)f0; (void)f1; (void)f2; (void)f3; (void)f4; (void)f5; (void)f6; (void)f7; (void)f8; (void)f9; (void)f10; (void)f11; (void)f12; (void)f13; (void)f14; (void)f15; (void)f16; (void)f17; (void)f18; (void)f19; (void)f20; (void)f21; (void)f22; (void)f23; (void)f24; (void)f25; (void)f26; (void)f27; (void)f28; (void)f29; (void)f30; (void)f31; (void)f32; (void)f33; (void)f34; (void)f35; (void)f36; (void)f37; (void)f38; (void)f39; (void)f40; (void)f41; (void)f42; (void)f43; (void)f44; (void)f45; (void)f46; (void)f47; (void)f48; (void)f49; (void)f50; (void)f51; (void)f52; (void)f53; (void)f54; (void)f55; (void)f56; (void)f57; (void)f58; (void)f59; (void)f60; (void)f61; (void)f62; (void)f63; (void)f64; (void)f65; (void)f66; (void)f67; (void)f68; (void)f69; (void)f70; (void)f71; (void)f72; (void)f73; (void)f74; (void)f75; (void)f76; (void)f77; (void)f78; (void)f79; (void)f80; (void)f81; (void)f82; (void)f83; (void)f84; (void)f85; (void)f86; (void)f87; (void)f88; (void)f89; (void)f90; (void)f91; (void)f92; (void)f93; (void)f94; (void)f95; (void)f96; (void)f97; (void)f98; (void)f99; (void)f100; (void)f101; (void)f102; (void)f103; (void)f104; (void)f105; (void)f106; (void)f107; (void)f108; (void)f109; (void)f110; (void)f111; (void)f112; (void)f113; (void)f114; (void)f115; (void)f116; (void)f117; (void)f118; (void)f119; (void)f120; (void)f121; (void)f122; (void)f123; (void)f124; (void)f125; (void)f126; (void)f127; (void)f128; (void)f129; (void)f130; (void)f131; (void)f132; (void)f133; (void)f134; (void)f135; (void)f136; (void)f137; (void)f138; (void)f139; (void)f140; (void)f141; (void)f142; (void)f143; (void)f144; (void)f145; (void)f146; (void)f147; (void)f148; (void)f149; (void)f150; (void)f151; (void)f152; (void)f153; (void)f154; (void)f155; (void)f156; (void)f157; (void)f158; (void)f159; (void)f160; (void)f161; (void)f162; (void)f163; (void)f164; (void)f165; (void)f166; (void)f167; (void)f168; (void)f169; (void)f170; (void)f171; (void)f172; (void)f173; (void)f174; (void)f175; (void)f176; (void)f177; (void)f178; (void)f179; (void)f180; (void)f181; (void)f182; (void)f183; (void)f184; (void)f185; (void)f186; (void)f187; (void)f188; (void)f189; (void)f190; (void)f191; (void)f192; (void)f193; (void)f194; (void)f195; (void)f196; (void)f197; (void)f198; (void)f199;
            return std::bool_constant<(std::is_reference_v<decltype(f0)> || std::is_reference_v<decltype(f1)> || std::is_reference_v<decltype(f2)> || std::is_reference_v<decltype(f3)> || std::is_reference_v<decltype(f4)> || std::is_reference_v<decltype(f5)> || std::is_reference_v<decltype(f6)> || std::is_reference_v<decltype(f7)> || std::is_reference_v<decltype(f8)> || std::is_reference_v<decltype(f9)> || std::is_reference_v<decltype(f10)> || std::is_reference_v<decltype(f11)> || std::is_reference_v<decltype(f12)> || std::is_reference_v<decltype(f13)> || std::is_reference_v<decltype(f14)> || std::is_reference_v<decltype(f15)> || std::is_reference_v<decltype(f16)> || std::is_reference_v<decltype(f17)> || std::is_reference_v<decltype(f18)> || std::is_reference_v<decltype(f19)> || std::is_reference_v<decltype(f20)> || std::is_reference_v<decltype(f21)> || std::is_reference_v<decltype(f22)> || std::is_reference_v<decltype(f23)> || std::is_reference_v<decltype(f24)> || std::is_reference_v<decltype(f25)> || std::is_reference_v<decltype(f26)> || std::is_reference_v<decltype(f27)> || std::is_reference_v<decltype(f28)> || std::is_reference_v<decltype(f29)> || std::is_reference_v<decltype(f30)> || std::is_reference_v<decltype(f31)> || std::is_reference_v<decltype(f32)> || std::is_reference_v<decltype(f33)> || std::is_reference_v<decltype(f34)> || std::is_reference_v<decltype(f35)> || std::is_reference_v<decltype(f36)> || std::is_reference_v<decltype(f37)> || std::is_reference_v<decltype(f38)> || std::is_reference_v<decltype(f39)> || std::is_reference_v<decltype(f40)> || std::is_reference_v<decltype(f41)> || std::is_reference_v<decltype(f42)> || std::is_reference_v<decltype(f43)> || std::is_reference_v<decltype(f44)> || std::is_reference_v<decltype(f45)> || std::is_reference_v<decltype(f46)> || std::is_reference_v<decltype(f47)> || std::is_reference_v<decltype(f48)> || std::is_reference_v<decltype(f49)> || std::is_reference_v<decltype(f50)> || std::is_reference_v<decltype(f51)> || std::is_reference_v<decltype(f52)> || std::is_reference_v<decltype(f53)> || std::is_reference_v<decltype(f54)> || std::is_reference_v<decltype(f55)> || std::is_reference_v<decltype(f56)> || std::is_reference_v<decltype(f57)> || std::is_reference_v<decltype(f58)> || std::is_reference_v<decltype(f59)> || std::is_reference_v<decltype(f60)> || std::is_reference_v<decltype(f61)> || std::is_reference_v<decltype(f62)> || std::is_reference_v<decltype(f63)> || std::is_reference_v<decltype(f64)> || std::is_reference_v<decltype(f65)> || std::is_reference_v<decltype(f66)> || std::is_reference_v<decltype(f67)> || std::is_reference_v<decltype(f68)> || std::is_reference_v<decltype(f69)> || std::is_reference_v<decltype(f70)> || std::is_reference_v<decltype(f71)> || std::is_reference_v<decltype(f72)> || std::is_reference_v<decltype(f73)> || std::is_reference_v<decltype(f74)> || std::is_reference_v<decltype(f75)> || std::is_reference_v<decltype(f76)> || std::is_reference_v<decltype(f77)> || std::is_reference_v<decltype(f78)> || std::is_reference_v<decltype(f79)> || std::is_reference_v<decltype(f80)> || std::is_reference_v<decltype(f81)> || std::is_reference_v<decltype(f82)> || std::is_reference_v<decltype(f83)> || std::is_reference_v<decltype(f84)> || std::is_reference_v<decltype(f85)> || std::is_reference_v<decltype(f86)> || std::is_reference_v<decltype(f87)> || std::is_reference_v<decltype(f88)> || std::is_reference_v<decltype(f89)> || std::is_reference_v<decltype(f90)> || std::is_reference_v<decltype(f91)> || std::is_reference_v<decltype(f92)> || std::is_reference_v<decltype(f93)> || std::is_reference_v<decltype(f94)> || std::is_reference_v<decltype(f95)> || std::is_reference_v<decltype(f96)> || std::is_reference_v<decltype(f97)> || std::is_reference_v<decltype(f98)> || std::is_reference_v<decltype(f99)> || std::is_reference_v<decltype(f100)> || std::is_reference_v<decltype(f101)> || std::is_reference_v<decltype(f102)> || std::is_reference_v<decltype(f103)> || std::is_reference_v<decltype(f104)> || std::is_reference_v<decltype(f105)> || std::is_reference_v<decltype(f106)> || std::is_reference_v<decltype(f107)> || std::is_reference_v<decltype(f108)> || std::is_reference_v<decltype(f109)> || std::is_reference_v<decltype(f110)> || std::is_reference_v<decltype(f111)> || std::is_reference_v<decltype(f112)> || std::is_reference_v<decltype(f113)> || std::is_reference_v<decltype(f114)> || std::is_reference_v<decltype(f115)> || std::is_reference_v<decltype(f116)> || std::is_reference_v<decltype(f117)> || std::is_reference_v<decltype(f118)> || std::is_reference_v<decltype(f119)> || std::is_reference_v<decltype(f120)> || std::is_reference_v<decltype(f121)> || std::is_reference_v<decltype(f122)> || std::is_reference_v<decltype(f123)> || std::is_reference_v<decltype(f124)> || std::is_reference_v<decltype(f125)> || std::is_reference_v<decltype(f126)> || std::is_reference_v<decltype(f127)> || std::is_reference_v<decltype(f128)> || std::is_reference_v<decltype(f129)> || std::is_reference_v<decltype(f130)> || std::is_reference_v<decltype(f131)> || std::is_reference_v<decltype(f132)> || std::is_reference_v<decltype(f133)> || std::is_reference_v<decltype(f134)> || std::is_reference_v<decltype(f135)> || std::is_reference_v<decltype(f136)> || std::is_reference_v<decltype(f137)> || std::is_reference_v<decltype(f138)> || std::is_reference_v<decltype(f139)> || std::is_reference_v<decltype(f140)> || std::is_reference_v<decltype(f141)> || std::is_reference_v<decltype(f142)> || std::is_reference_v<decltype(f143)> || std::is_reference_v<decltype(f144)> || std::is_reference_v<decltype(f145)> || std::is_reference_v<decltype(f146)> || std::is_reference_v<decltype(f147)> || std::is_reference_v<decltype(f148)> || std::is_reference_v<decltype(f149)> || std::is_reference_v<decltype(f150)> || std::is_reference_v<decltype(f151)> || std::is_reference_v<decltype(f152)> || std::is_reference_v<decltype(f153)> || std::is_reference_v<decltype(f154)> || std::is_reference_v<decltype(f155)> || std::is_reference_v<decltype(f156)> || std::is_reference_v<decltype(f157)> || std::is_reference_v<decltype(f158)> || std::is_reference_v<decltype(f159)> || std::is_reference_v<decltype(f160)> || std::is_reference_v<decltype(f161)> || std::is_reference_v<decltype(f162)> || std::is_reference_v<decltype(f163)> || std::is_reference_v<decltype(f164)> || std::is_reference_v<decltype(f165)> || std::is_reference_v<decltype(f166)> || std::is_reference_v<decltype(f167)> || std::is_reference_v<decltype(f168)> || std::is_reference_v<decltype(f169)> || std::is_reference_v<decltype(f170)> || std::is_reference_v<decltype(f171)> || std::is_reference_v<decltype(f172)> || std::is_reference_v<decltype(f173)> || std::is_reference_v<decltype(f174)> || std::is_reference_v<decltype(f175)> || std::is_reference_v<decltype(f176)> || std::is_reference_v<decltype(f177)> || std::is_reference_v<decltype(f178)> || std::is_reference_v<decltype(f179)> || std::is_reference_v<decltype(f180)> || std::is_reference_v<decltype(f181)> || std::is_reference_v<decltype(f182)> || std::is_reference_v<decltype(f183)> || std::is_reference_v<decltype(f184)> || std::is_reference_v<decltype(f185)> || std::is_reference_v<decltype(f186)> || std::is_reference_v<decltype(f187)> || std::is_reference_v<decltype(f188)> || std::is_reference_v<decltype(f189)> || std::is_reference_v<decltype(f190)> || std::is_reference_v<decltype(f191)> || std::is_reference_v<decltype(f192)> || std::is_reference_v<decltype(f193)> || std::is_reference_v<decltype(f194)> || std::is_reference_v<decltype(f195)> || std::is_reference_v<decltype(f196)> || std::is_reference_v<decltype(f197)> || std::is_reference_v<decltype(f198)> || std::is_reference_v<decltype(f199)>)>{};
        }(std::declval<T&>()));
+
+// Arity 0: field-count probe — viable iff T is constructible from 0 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 0> count_arity_impl(priority_tag<0>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<0>{}));
+
+// Arity 1: field-count probe — viable iff T is constructible from 1 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 1> count_arity_impl(priority_tag<1>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<1>{}));
+
+// Arity 2: field-count probe — viable iff T is constructible from 2 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 2> count_arity_impl(priority_tag<2>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<2>{}));
+
+// Arity 3: field-count probe — viable iff T is constructible from 3 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 3> count_arity_impl(priority_tag<3>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<3>{}));
+
+// Arity 4: field-count probe — viable iff T is constructible from 4 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 4> count_arity_impl(priority_tag<4>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<4>{}));
+
+// Arity 5: field-count probe — viable iff T is constructible from 5 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 5> count_arity_impl(priority_tag<5>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<5>{}));
+
+// Arity 6: field-count probe — viable iff T is constructible from 6 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 6> count_arity_impl(priority_tag<6>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<6>{}));
+
+// Arity 7: field-count probe — viable iff T is constructible from 7 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 7> count_arity_impl(priority_tag<7>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<7>{}));
+
+// Arity 8: field-count probe — viable iff T is constructible from 8 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 8> count_arity_impl(priority_tag<8>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<8>{}));
+
+// Arity 9: field-count probe — viable iff T is constructible from 9 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 9> count_arity_impl(priority_tag<9>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<9>{}));
+
+// Arity 10: field-count probe — viable iff T is constructible from 10 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 10> count_arity_impl(priority_tag<10>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<10>{}));
+
+// Arity 11: field-count probe — viable iff T is constructible from 11 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 11> count_arity_impl(priority_tag<11>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<11>{}));
+
+// Arity 12: field-count probe — viable iff T is constructible from 12 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 12> count_arity_impl(priority_tag<12>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<12>{}));
+
+// Arity 13: field-count probe — viable iff T is constructible from 13 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 13> count_arity_impl(priority_tag<13>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<13>{}));
+
+// Arity 14: field-count probe — viable iff T is constructible from 14 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 14> count_arity_impl(priority_tag<14>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<14>{}));
+
+// Arity 15: field-count probe — viable iff T is constructible from 15 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 15> count_arity_impl(priority_tag<15>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<15>{}));
+
+// Arity 16: field-count probe — viable iff T is constructible from 16 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 16> count_arity_impl(priority_tag<16>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<16>{}));
+
+// Arity 17: field-count probe — viable iff T is constructible from 17 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 17> count_arity_impl(priority_tag<17>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<17>{}));
+
+// Arity 18: field-count probe — viable iff T is constructible from 18 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 18> count_arity_impl(priority_tag<18>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<18>{}));
+
+// Arity 19: field-count probe — viable iff T is constructible from 19 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 19> count_arity_impl(priority_tag<19>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<19>{}));
+
+// Arity 20: field-count probe — viable iff T is constructible from 20 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 20> count_arity_impl(priority_tag<20>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<20>{}));
+
+// Arity 21: field-count probe — viable iff T is constructible from 21 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 21> count_arity_impl(priority_tag<21>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<21>{}));
+
+// Arity 22: field-count probe — viable iff T is constructible from 22 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 22> count_arity_impl(priority_tag<22>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<22>{}));
+
+// Arity 23: field-count probe — viable iff T is constructible from 23 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 23> count_arity_impl(priority_tag<23>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<23>{}));
+
+// Arity 24: field-count probe — viable iff T is constructible from 24 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 24> count_arity_impl(priority_tag<24>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<24>{}));
+
+// Arity 25: field-count probe — viable iff T is constructible from 25 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 25> count_arity_impl(priority_tag<25>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<25>{}));
+
+// Arity 26: field-count probe — viable iff T is constructible from 26 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 26> count_arity_impl(priority_tag<26>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<26>{}));
+
+// Arity 27: field-count probe — viable iff T is constructible from 27 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 27> count_arity_impl(priority_tag<27>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<27>{}));
+
+// Arity 28: field-count probe — viable iff T is constructible from 28 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 28> count_arity_impl(priority_tag<28>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<28>{}));
+
+// Arity 29: field-count probe — viable iff T is constructible from 29 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 29> count_arity_impl(priority_tag<29>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<29>{}));
+
+// Arity 30: field-count probe — viable iff T is constructible from 30 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 30> count_arity_impl(priority_tag<30>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<30>{}));
+
+// Arity 31: field-count probe — viable iff T is constructible from 31 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 31> count_arity_impl(priority_tag<31>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<31>{}));
+
+// Arity 32: field-count probe — viable iff T is constructible from 32 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 32> count_arity_impl(priority_tag<32>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<32>{}));
+
+// Arity 33: field-count probe — viable iff T is constructible from 33 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 33> count_arity_impl(priority_tag<33>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<33>{}));
+
+// Arity 34: field-count probe — viable iff T is constructible from 34 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 34> count_arity_impl(priority_tag<34>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<34>{}));
+
+// Arity 35: field-count probe — viable iff T is constructible from 35 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 35> count_arity_impl(priority_tag<35>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<35>{}));
+
+// Arity 36: field-count probe — viable iff T is constructible from 36 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 36> count_arity_impl(priority_tag<36>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<36>{}));
+
+// Arity 37: field-count probe — viable iff T is constructible from 37 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 37> count_arity_impl(priority_tag<37>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<37>{}));
+
+// Arity 38: field-count probe — viable iff T is constructible from 38 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 38> count_arity_impl(priority_tag<38>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<38>{}));
+
+// Arity 39: field-count probe — viable iff T is constructible from 39 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 39> count_arity_impl(priority_tag<39>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<39>{}));
+
+// Arity 40: field-count probe — viable iff T is constructible from 40 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 40> count_arity_impl(priority_tag<40>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<40>{}));
+
+// Arity 41: field-count probe — viable iff T is constructible from 41 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 41> count_arity_impl(priority_tag<41>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<41>{}));
+
+// Arity 42: field-count probe — viable iff T is constructible from 42 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 42> count_arity_impl(priority_tag<42>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<42>{}));
+
+// Arity 43: field-count probe — viable iff T is constructible from 43 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 43> count_arity_impl(priority_tag<43>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<43>{}));
+
+// Arity 44: field-count probe — viable iff T is constructible from 44 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 44> count_arity_impl(priority_tag<44>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<44>{}));
+
+// Arity 45: field-count probe — viable iff T is constructible from 45 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 45> count_arity_impl(priority_tag<45>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<45>{}));
+
+// Arity 46: field-count probe — viable iff T is constructible from 46 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 46> count_arity_impl(priority_tag<46>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<46>{}));
+
+// Arity 47: field-count probe — viable iff T is constructible from 47 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 47> count_arity_impl(priority_tag<47>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<47>{}));
+
+// Arity 48: field-count probe — viable iff T is constructible from 48 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 48> count_arity_impl(priority_tag<48>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<48>{}));
+
+// Arity 49: field-count probe — viable iff T is constructible from 49 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 49> count_arity_impl(priority_tag<49>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<49>{}));
+
+// Arity 50: field-count probe — viable iff T is constructible from 50 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 50> count_arity_impl(priority_tag<50>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<50>{}));
+
+// Arity 51: field-count probe — viable iff T is constructible from 51 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 51> count_arity_impl(priority_tag<51>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<51>{}));
+
+// Arity 52: field-count probe — viable iff T is constructible from 52 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 52> count_arity_impl(priority_tag<52>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<52>{}));
+
+// Arity 53: field-count probe — viable iff T is constructible from 53 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 53> count_arity_impl(priority_tag<53>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<53>{}));
+
+// Arity 54: field-count probe — viable iff T is constructible from 54 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 54> count_arity_impl(priority_tag<54>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<54>{}));
+
+// Arity 55: field-count probe — viable iff T is constructible from 55 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 55> count_arity_impl(priority_tag<55>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<55>{}));
+
+// Arity 56: field-count probe — viable iff T is constructible from 56 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 56> count_arity_impl(priority_tag<56>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<56>{}));
+
+// Arity 57: field-count probe — viable iff T is constructible from 57 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 57> count_arity_impl(priority_tag<57>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<57>{}));
+
+// Arity 58: field-count probe — viable iff T is constructible from 58 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 58> count_arity_impl(priority_tag<58>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<58>{}));
+
+// Arity 59: field-count probe — viable iff T is constructible from 59 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 59> count_arity_impl(priority_tag<59>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<59>{}));
+
+// Arity 60: field-count probe — viable iff T is constructible from 60 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 60> count_arity_impl(priority_tag<60>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<60>{}));
+
+// Arity 61: field-count probe — viable iff T is constructible from 61 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 61> count_arity_impl(priority_tag<61>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<61>{}));
+
+// Arity 62: field-count probe — viable iff T is constructible from 62 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 62> count_arity_impl(priority_tag<62>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<62>{}));
+
+// Arity 63: field-count probe — viable iff T is constructible from 63 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 63> count_arity_impl(priority_tag<63>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<63>{}));
+
+// Arity 64: field-count probe — viable iff T is constructible from 64 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 64> count_arity_impl(priority_tag<64>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<64>{}));
+
+// Arity 65: field-count probe — viable iff T is constructible from 65 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 65> count_arity_impl(priority_tag<65>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<65>{}));
+
+// Arity 66: field-count probe — viable iff T is constructible from 66 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 66> count_arity_impl(priority_tag<66>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<66>{}));
+
+// Arity 67: field-count probe — viable iff T is constructible from 67 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 67> count_arity_impl(priority_tag<67>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<67>{}));
+
+// Arity 68: field-count probe — viable iff T is constructible from 68 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 68> count_arity_impl(priority_tag<68>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<68>{}));
+
+// Arity 69: field-count probe — viable iff T is constructible from 69 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 69> count_arity_impl(priority_tag<69>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<69>{}));
+
+// Arity 70: field-count probe — viable iff T is constructible from 70 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 70> count_arity_impl(priority_tag<70>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<70>{}));
+
+// Arity 71: field-count probe — viable iff T is constructible from 71 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 71> count_arity_impl(priority_tag<71>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<71>{}));
+
+// Arity 72: field-count probe — viable iff T is constructible from 72 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 72> count_arity_impl(priority_tag<72>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<72>{}));
+
+// Arity 73: field-count probe — viable iff T is constructible from 73 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 73> count_arity_impl(priority_tag<73>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<73>{}));
+
+// Arity 74: field-count probe — viable iff T is constructible from 74 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 74> count_arity_impl(priority_tag<74>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<74>{}));
+
+// Arity 75: field-count probe — viable iff T is constructible from 75 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 75> count_arity_impl(priority_tag<75>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<75>{}));
+
+// Arity 76: field-count probe — viable iff T is constructible from 76 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 76> count_arity_impl(priority_tag<76>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<76>{}));
+
+// Arity 77: field-count probe — viable iff T is constructible from 77 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 77> count_arity_impl(priority_tag<77>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<77>{}));
+
+// Arity 78: field-count probe — viable iff T is constructible from 78 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 78> count_arity_impl(priority_tag<78>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<78>{}));
+
+// Arity 79: field-count probe — viable iff T is constructible from 79 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 79> count_arity_impl(priority_tag<79>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<79>{}));
+
+// Arity 80: field-count probe — viable iff T is constructible from 80 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 80> count_arity_impl(priority_tag<80>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<80>{}));
+
+// Arity 81: field-count probe — viable iff T is constructible from 81 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 81> count_arity_impl(priority_tag<81>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<81>{}));
+
+// Arity 82: field-count probe — viable iff T is constructible from 82 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 82> count_arity_impl(priority_tag<82>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<82>{}));
+
+// Arity 83: field-count probe — viable iff T is constructible from 83 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 83> count_arity_impl(priority_tag<83>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<83>{}));
+
+// Arity 84: field-count probe — viable iff T is constructible from 84 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 84> count_arity_impl(priority_tag<84>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<84>{}));
+
+// Arity 85: field-count probe — viable iff T is constructible from 85 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 85> count_arity_impl(priority_tag<85>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<85>{}));
+
+// Arity 86: field-count probe — viable iff T is constructible from 86 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 86> count_arity_impl(priority_tag<86>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<86>{}));
+
+// Arity 87: field-count probe — viable iff T is constructible from 87 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 87> count_arity_impl(priority_tag<87>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<87>{}));
+
+// Arity 88: field-count probe — viable iff T is constructible from 88 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 88> count_arity_impl(priority_tag<88>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<88>{}));
+
+// Arity 89: field-count probe — viable iff T is constructible from 89 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 89> count_arity_impl(priority_tag<89>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<89>{}));
+
+// Arity 90: field-count probe — viable iff T is constructible from 90 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 90> count_arity_impl(priority_tag<90>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<90>{}));
+
+// Arity 91: field-count probe — viable iff T is constructible from 91 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 91> count_arity_impl(priority_tag<91>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<91>{}));
+
+// Arity 92: field-count probe — viable iff T is constructible from 92 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 92> count_arity_impl(priority_tag<92>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<92>{}));
+
+// Arity 93: field-count probe — viable iff T is constructible from 93 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 93> count_arity_impl(priority_tag<93>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<93>{}));
+
+// Arity 94: field-count probe — viable iff T is constructible from 94 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 94> count_arity_impl(priority_tag<94>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<94>{}));
+
+// Arity 95: field-count probe — viable iff T is constructible from 95 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 95> count_arity_impl(priority_tag<95>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<95>{}));
+
+// Arity 96: field-count probe — viable iff T is constructible from 96 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 96> count_arity_impl(priority_tag<96>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<96>{}));
+
+// Arity 97: field-count probe — viable iff T is constructible from 97 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 97> count_arity_impl(priority_tag<97>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<97>{}));
+
+// Arity 98: field-count probe — viable iff T is constructible from 98 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 98> count_arity_impl(priority_tag<98>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<98>{}));
+
+// Arity 99: field-count probe — viable iff T is constructible from 99 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 99> count_arity_impl(priority_tag<99>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<99>{}));
+
+// Arity 100: field-count probe — viable iff T is constructible from 100 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 100> count_arity_impl(priority_tag<100>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<100>{}));
+
+// Arity 101: field-count probe — viable iff T is constructible from 101 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 101> count_arity_impl(priority_tag<101>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<101>{}));
+
+// Arity 102: field-count probe — viable iff T is constructible from 102 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 102> count_arity_impl(priority_tag<102>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<102>{}));
+
+// Arity 103: field-count probe — viable iff T is constructible from 103 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 103> count_arity_impl(priority_tag<103>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<103>{}));
+
+// Arity 104: field-count probe — viable iff T is constructible from 104 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 104> count_arity_impl(priority_tag<104>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<104>{}));
+
+// Arity 105: field-count probe — viable iff T is constructible from 105 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 105> count_arity_impl(priority_tag<105>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<105>{}));
+
+// Arity 106: field-count probe — viable iff T is constructible from 106 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 106> count_arity_impl(priority_tag<106>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<106>{}));
+
+// Arity 107: field-count probe — viable iff T is constructible from 107 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 107> count_arity_impl(priority_tag<107>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<107>{}));
+
+// Arity 108: field-count probe — viable iff T is constructible from 108 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 108> count_arity_impl(priority_tag<108>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<108>{}));
+
+// Arity 109: field-count probe — viable iff T is constructible from 109 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 109> count_arity_impl(priority_tag<109>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<109>{}));
+
+// Arity 110: field-count probe — viable iff T is constructible from 110 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 110> count_arity_impl(priority_tag<110>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<110>{}));
+
+// Arity 111: field-count probe — viable iff T is constructible from 111 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 111> count_arity_impl(priority_tag<111>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<111>{}));
+
+// Arity 112: field-count probe — viable iff T is constructible from 112 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 112> count_arity_impl(priority_tag<112>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<112>{}));
+
+// Arity 113: field-count probe — viable iff T is constructible from 113 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 113> count_arity_impl(priority_tag<113>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<113>{}));
+
+// Arity 114: field-count probe — viable iff T is constructible from 114 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 114> count_arity_impl(priority_tag<114>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<114>{}));
+
+// Arity 115: field-count probe — viable iff T is constructible from 115 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 115> count_arity_impl(priority_tag<115>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<115>{}));
+
+// Arity 116: field-count probe — viable iff T is constructible from 116 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 116> count_arity_impl(priority_tag<116>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<116>{}));
+
+// Arity 117: field-count probe — viable iff T is constructible from 117 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 117> count_arity_impl(priority_tag<117>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<117>{}));
+
+// Arity 118: field-count probe — viable iff T is constructible from 118 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 118> count_arity_impl(priority_tag<118>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<118>{}));
+
+// Arity 119: field-count probe — viable iff T is constructible from 119 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 119> count_arity_impl(priority_tag<119>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<119>{}));
+
+// Arity 120: field-count probe — viable iff T is constructible from 120 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 120> count_arity_impl(priority_tag<120>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<120>{}));
+
+// Arity 121: field-count probe — viable iff T is constructible from 121 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 121> count_arity_impl(priority_tag<121>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<121>{}));
+
+// Arity 122: field-count probe — viable iff T is constructible from 122 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 122> count_arity_impl(priority_tag<122>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<122>{}));
+
+// Arity 123: field-count probe — viable iff T is constructible from 123 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 123> count_arity_impl(priority_tag<123>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<123>{}));
+
+// Arity 124: field-count probe — viable iff T is constructible from 124 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 124> count_arity_impl(priority_tag<124>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<124>{}));
+
+// Arity 125: field-count probe — viable iff T is constructible from 125 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 125> count_arity_impl(priority_tag<125>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<125>{}));
+
+// Arity 126: field-count probe — viable iff T is constructible from 126 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 126> count_arity_impl(priority_tag<126>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<126>{}));
+
+// Arity 127: field-count probe — viable iff T is constructible from 127 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 127> count_arity_impl(priority_tag<127>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<127>{}));
+
+// Arity 128: field-count probe — viable iff T is constructible from 128 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 128> count_arity_impl(priority_tag<128>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<128>{}));
+
+// Arity 129: field-count probe — viable iff T is constructible from 129 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 129> count_arity_impl(priority_tag<129>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<129>{}));
+
+// Arity 130: field-count probe — viable iff T is constructible from 130 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 130> count_arity_impl(priority_tag<130>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<130>{}));
+
+// Arity 131: field-count probe — viable iff T is constructible from 131 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 131> count_arity_impl(priority_tag<131>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<131>{}));
+
+// Arity 132: field-count probe — viable iff T is constructible from 132 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 132> count_arity_impl(priority_tag<132>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<132>{}));
+
+// Arity 133: field-count probe — viable iff T is constructible from 133 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 133> count_arity_impl(priority_tag<133>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<133>{}));
+
+// Arity 134: field-count probe — viable iff T is constructible from 134 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 134> count_arity_impl(priority_tag<134>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<134>{}));
+
+// Arity 135: field-count probe — viable iff T is constructible from 135 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 135> count_arity_impl(priority_tag<135>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<135>{}));
+
+// Arity 136: field-count probe — viable iff T is constructible from 136 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 136> count_arity_impl(priority_tag<136>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<136>{}));
+
+// Arity 137: field-count probe — viable iff T is constructible from 137 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 137> count_arity_impl(priority_tag<137>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<137>{}));
+
+// Arity 138: field-count probe — viable iff T is constructible from 138 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 138> count_arity_impl(priority_tag<138>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<138>{}));
+
+// Arity 139: field-count probe — viable iff T is constructible from 139 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 139> count_arity_impl(priority_tag<139>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<139>{}));
+
+// Arity 140: field-count probe — viable iff T is constructible from 140 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 140> count_arity_impl(priority_tag<140>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<140>{}));
+
+// Arity 141: field-count probe — viable iff T is constructible from 141 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 141> count_arity_impl(priority_tag<141>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<141>{}));
+
+// Arity 142: field-count probe — viable iff T is constructible from 142 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 142> count_arity_impl(priority_tag<142>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<142>{}));
+
+// Arity 143: field-count probe — viable iff T is constructible from 143 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 143> count_arity_impl(priority_tag<143>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<143>{}));
+
+// Arity 144: field-count probe — viable iff T is constructible from 144 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 144> count_arity_impl(priority_tag<144>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<144>{}));
+
+// Arity 145: field-count probe — viable iff T is constructible from 145 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 145> count_arity_impl(priority_tag<145>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<145>{}));
+
+// Arity 146: field-count probe — viable iff T is constructible from 146 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 146> count_arity_impl(priority_tag<146>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<146>{}));
+
+// Arity 147: field-count probe — viable iff T is constructible from 147 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 147> count_arity_impl(priority_tag<147>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<147>{}));
+
+// Arity 148: field-count probe — viable iff T is constructible from 148 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 148> count_arity_impl(priority_tag<148>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<148>{}));
+
+// Arity 149: field-count probe — viable iff T is constructible from 149 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 149> count_arity_impl(priority_tag<149>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<149>{}));
+
+// Arity 150: field-count probe — viable iff T is constructible from 150 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 150> count_arity_impl(priority_tag<150>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<150>{}));
+
+// Arity 151: field-count probe — viable iff T is constructible from 151 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 151> count_arity_impl(priority_tag<151>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<151>{}));
+
+// Arity 152: field-count probe — viable iff T is constructible from 152 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 152> count_arity_impl(priority_tag<152>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<152>{}));
+
+// Arity 153: field-count probe — viable iff T is constructible from 153 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 153> count_arity_impl(priority_tag<153>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<153>{}));
+
+// Arity 154: field-count probe — viable iff T is constructible from 154 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 154> count_arity_impl(priority_tag<154>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<154>{}));
+
+// Arity 155: field-count probe — viable iff T is constructible from 155 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 155> count_arity_impl(priority_tag<155>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<155>{}));
+
+// Arity 156: field-count probe — viable iff T is constructible from 156 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 156> count_arity_impl(priority_tag<156>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<156>{}));
+
+// Arity 157: field-count probe — viable iff T is constructible from 157 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 157> count_arity_impl(priority_tag<157>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<157>{}));
+
+// Arity 158: field-count probe — viable iff T is constructible from 158 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 158> count_arity_impl(priority_tag<158>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<158>{}));
+
+// Arity 159: field-count probe — viable iff T is constructible from 159 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 159> count_arity_impl(priority_tag<159>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<159>{}));
+
+// Arity 160: field-count probe — viable iff T is constructible from 160 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 160> count_arity_impl(priority_tag<160>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<160>{}));
+
+// Arity 161: field-count probe — viable iff T is constructible from 161 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 161> count_arity_impl(priority_tag<161>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<161>{}));
+
+// Arity 162: field-count probe — viable iff T is constructible from 162 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 162> count_arity_impl(priority_tag<162>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<162>{}));
+
+// Arity 163: field-count probe — viable iff T is constructible from 163 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 163> count_arity_impl(priority_tag<163>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<163>{}));
+
+// Arity 164: field-count probe — viable iff T is constructible from 164 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 164> count_arity_impl(priority_tag<164>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<164>{}));
+
+// Arity 165: field-count probe — viable iff T is constructible from 165 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 165> count_arity_impl(priority_tag<165>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<165>{}));
+
+// Arity 166: field-count probe — viable iff T is constructible from 166 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 166> count_arity_impl(priority_tag<166>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<166>{}));
+
+// Arity 167: field-count probe — viable iff T is constructible from 167 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 167> count_arity_impl(priority_tag<167>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<167>{}));
+
+// Arity 168: field-count probe — viable iff T is constructible from 168 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 168> count_arity_impl(priority_tag<168>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<168>{}));
+
+// Arity 169: field-count probe — viable iff T is constructible from 169 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 169> count_arity_impl(priority_tag<169>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<169>{}));
+
+// Arity 170: field-count probe — viable iff T is constructible from 170 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 170> count_arity_impl(priority_tag<170>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<170>{}));
+
+// Arity 171: field-count probe — viable iff T is constructible from 171 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 171> count_arity_impl(priority_tag<171>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<171>{}));
+
+// Arity 172: field-count probe — viable iff T is constructible from 172 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 172> count_arity_impl(priority_tag<172>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<172>{}));
+
+// Arity 173: field-count probe — viable iff T is constructible from 173 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 173> count_arity_impl(priority_tag<173>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<173>{}));
+
+// Arity 174: field-count probe — viable iff T is constructible from 174 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 174> count_arity_impl(priority_tag<174>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<174>{}));
+
+// Arity 175: field-count probe — viable iff T is constructible from 175 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 175> count_arity_impl(priority_tag<175>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<175>{}));
+
+// Arity 176: field-count probe — viable iff T is constructible from 176 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 176> count_arity_impl(priority_tag<176>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<176>{}));
+
+// Arity 177: field-count probe — viable iff T is constructible from 177 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 177> count_arity_impl(priority_tag<177>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<177>{}));
+
+// Arity 178: field-count probe — viable iff T is constructible from 178 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 178> count_arity_impl(priority_tag<178>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<178>{}));
+
+// Arity 179: field-count probe — viable iff T is constructible from 179 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 179> count_arity_impl(priority_tag<179>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<179>{}));
+
+// Arity 180: field-count probe — viable iff T is constructible from 180 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 180> count_arity_impl(priority_tag<180>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<180>{}));
+
+// Arity 181: field-count probe — viable iff T is constructible from 181 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 181> count_arity_impl(priority_tag<181>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<181>{}));
+
+// Arity 182: field-count probe — viable iff T is constructible from 182 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 182> count_arity_impl(priority_tag<182>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<182>{}));
+
+// Arity 183: field-count probe — viable iff T is constructible from 183 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 183> count_arity_impl(priority_tag<183>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<183>{}));
+
+// Arity 184: field-count probe — viable iff T is constructible from 184 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 184> count_arity_impl(priority_tag<184>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<184>{}));
+
+// Arity 185: field-count probe — viable iff T is constructible from 185 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 185> count_arity_impl(priority_tag<185>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<185>{}));
+
+// Arity 186: field-count probe — viable iff T is constructible from 186 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 186> count_arity_impl(priority_tag<186>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<186>{}));
+
+// Arity 187: field-count probe — viable iff T is constructible from 187 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 187> count_arity_impl(priority_tag<187>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<187>{}));
+
+// Arity 188: field-count probe — viable iff T is constructible from 188 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 188> count_arity_impl(priority_tag<188>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<188>{}));
+
+// Arity 189: field-count probe — viable iff T is constructible from 189 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 189> count_arity_impl(priority_tag<189>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<189>{}));
+
+// Arity 190: field-count probe — viable iff T is constructible from 190 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 190> count_arity_impl(priority_tag<190>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<190>{}));
+
+// Arity 191: field-count probe — viable iff T is constructible from 191 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 191> count_arity_impl(priority_tag<191>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<191>{}));
+
+// Arity 192: field-count probe — viable iff T is constructible from 192 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 192> count_arity_impl(priority_tag<192>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<192>{}));
+
+// Arity 193: field-count probe — viable iff T is constructible from 193 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 193> count_arity_impl(priority_tag<193>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<193>{}));
+
+// Arity 194: field-count probe — viable iff T is constructible from 194 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 194> count_arity_impl(priority_tag<194>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<194>{}));
+
+// Arity 195: field-count probe — viable iff T is constructible from 195 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 195> count_arity_impl(priority_tag<195>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<195>{}));
+
+// Arity 196: field-count probe — viable iff T is constructible from 196 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 196> count_arity_impl(priority_tag<196>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<196>{}));
+
+// Arity 197: field-count probe — viable iff T is constructible from 197 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 197> count_arity_impl(priority_tag<197>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<197>{}));
+
+// Arity 198: field-count probe — viable iff T is constructible from 198 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 198> count_arity_impl(priority_tag<198>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<198>{}));
+
+// Arity 199: field-count probe — viable iff T is constructible from 199 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 199> count_arity_impl(priority_tag<199>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<199>{}));
+
+// Arity 200: field-count probe — viable iff T is constructible from 200 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 200> count_arity_impl(priority_tag<200>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<200>{}));
+
+// Arity 201: field-count probe — viable iff T is constructible from 201 probes.
+template <typename T>
+constexpr std::integral_constant<std::size_t, 201> count_arity_impl(priority_tag<201>)
+    requires (simulnetx::reflect::detail::paren_constructible<T>(
+        std::make_index_sequence<201>{}));
 
 }  // namespace simulnetx::reflect::detail
