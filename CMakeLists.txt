@@ -44,6 +44,7 @@ if(SIMULNETX_BUILD_TESTS)
         tests/golden_test.cxx
         tests/network_test.cxx
         tests/partition_test.cxx
+        tests/reflect_test.cxx
         tests/rng_test.cxx
         tests/scenario_test.cxx
     )
