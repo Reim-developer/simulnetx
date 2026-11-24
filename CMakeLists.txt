@@ -115,3 +115,39 @@ if(SIMULNETX_BUILD_EXAMPLES)
         target_compile_options(trace_retry PRIVATE -Wall -Wextra -Werror)
     endif()
 endif()
+
+# Install rules: `find_package(simulnetx)` for consumers. The library is
+# header + archive only; tests, examples and the internal reflect
+# generator (tools/generate_reflect.py) are not installed.
+include(GNUInstallDirs)
+include(CMakePackageConfigHelpers)
+
+install(TARGETS simulnetx
+    EXPORT simulnetxTargets
+    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+)
+install(DIRECTORY include/simulnetx DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+
+install(EXPORT simulnetxTargets
+    FILE simulnetxTargets.cmake
+    NAMESPACE simulnetx::
+    DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/simulnetx
+)
+
+configure_package_config_file(
+    ${CMAKE_CURRENT_SOURCE_DIR}/cmake/simulnetxConfig.cmake.in
+    ${CMAKE_CURRENT_BINARY_DIR}/simulnetxConfig.cmake
+    INSTALL_DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/simulnetx
+)
+write_basic_package_version_file(
+    ${CMAKE_CURRENT_BINARY_DIR}/simulnetxConfigVersion.cmake
+    VERSION ${PROJECT_VERSION}
+    COMPATIBILITY SameMajorVersion
+)
+install(FILES
+    ${CMAKE_CURRENT_BINARY_DIR}/simulnetxConfig.cmake
+    ${CMAKE_CURRENT_BINARY_DIR}/simulnetxConfigVersion.cmake
+    DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/simulnetx
+)
