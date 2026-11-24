@@ -46,6 +46,7 @@ if(SIMULNETX_BUILD_TESTS)
         tests/partition_test.cxx
         tests/reflect_test.cxx
         tests/request_test.cxx
+        tests/request_trace_test.cxx
         tests/rng_test.cxx
         tests/scenario_test.cxx
         tests/serializer_test.cxx

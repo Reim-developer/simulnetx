@@ -62,6 +62,8 @@ struct request_state {
     std::function<void()> resend;
     // Schedule a node timer (cancelled by a crash, like any node timer).
     std::function<void(std::chrono::nanoseconds, std::function<void()>)> arm_timer;
+    // Record a request_timeout trace event for this request.
+    std::function<void()> record_timeout;
     // The self-re-arming retry callback, owned here so the re-arming
     // lambda can hold only weak references to it (no reference cycle).
     std::shared_ptr<std::function<void()>> retry_callback;
@@ -136,6 +138,9 @@ public:
                 return;  // Response arrived, or the node crashed.
             }
             state->erase_from_pending();
+            if (state->record_timeout) {
+                state->record_timeout();
+            }
             if (state->on_timeout) {
                 state->on_timeout();
             }

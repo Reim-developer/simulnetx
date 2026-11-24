@@ -105,12 +105,19 @@ public:
         auto on_response = std::make_shared<std::function<void(const Resp&)>>();
         state->is_pending = [this, id] { return pending_.contains(id); };
         state->erase_from_pending = [this, id] { pending_.erase(id); };
-        state->resend = [this, id, to, req_tag = detail::type_tag<Req>(), req_bytes] {
+        state->resend = [this, id, to, req_tag = detail::type_tag<Req>(), req_bytes,
+                         attempt = 1]() mutable {
+            // Retries reuse the same request id; the attempt counter lives
+            // in this lambda (capturing state would create a reference
+            // cycle: state owns resend).
+            ++attempt;
             send_request_envelope(id, to, req_tag, req_bytes);
+            record_request_sent(id, to, attempt);
         };
         state->arm_timer = [this](std::chrono::nanoseconds d, std::function<void()> cb) {
             after(d, std::move(cb));
         };
+        state->record_timeout = [this, id] { record_request_timeout(id); };
         pending_request entry;
         entry.resp_tag = detail::type_tag<Resp>();
         entry.state = state;
@@ -129,6 +136,7 @@ public:
         // so a response can never arrive before the caller attaches
         // on_response.
         send_request_envelope(id, to, detail::type_tag<Req>(), req_bytes);
+        record_request_sent(id, to, 1);
         return request_handle<Req, Resp>(state, on_response);
     }
 
@@ -192,6 +200,12 @@ private:
     // Send with a declared type tag (0 for raw sends). The tag travels
     // with the message so the trace can show it at delivery time.
     void send_with_tag(node_id to, std::vector<std::byte> payload, std::uint64_t tag);
+
+    // Record typed-layer trace events (the transport events are recorded
+    // by network itself; see trace.hxx).
+    void record_request_sent(std::uint64_t id, node_id to, unsigned attempt);
+    void record_response_received(node_id from, std::uint64_t id);
+    void record_request_timeout(std::uint64_t id);
 
     // Send a request envelope: [request_envelope_tag][id][req_tag][payload].
     void send_request_envelope(std::uint64_t id, node_id to, std::uint64_t req_tag,

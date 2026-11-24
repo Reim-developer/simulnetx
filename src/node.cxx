@@ -94,6 +94,7 @@ void node::dispatch_response(const message& msg) {
                            std::to_string(resp_tag) +
                            "); the server replied with a different type than requested");
     }
+    record_response_received(msg.from, id);
     entry.deliver(in);
 }
 
@@ -105,6 +106,27 @@ void node::send_request_envelope(std::uint64_t id, node_id to, std::uint64_t req
     detail::append_u64(payload, req_tag);
     detail::append_bytes(payload, req_bytes.data(), req_bytes.size());
     send_with_tag(to, std::move(payload), req_tag);
+}
+
+void node::record_request_sent(std::uint64_t id, node_id to, unsigned attempt) {
+    owner_->record(trace_event{.kind = event_kind::request_sent,
+                               .from = id_,
+                               .to = to,
+                               .request_id = id,
+                               .attempt = attempt});
+}
+
+void node::record_response_received(node_id from, std::uint64_t id) {
+    owner_->record(trace_event{.kind = event_kind::response_received,
+                               .from = from,
+                               .to = id_,
+                               .request_id = id});
+}
+
+void node::record_request_timeout(std::uint64_t id) {
+    owner_->record(trace_event{.kind = event_kind::request_timeout,
+                               .node = id_,
+                               .request_id = id});
 }
 
 void node::cancel_pending_requests() {
