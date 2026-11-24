@@ -41,11 +41,11 @@ struct message {
             throw decode_error("simulnetx: decode_error: message too short for a type tag (" +
                                std::to_string(payload.size()) + " bytes)");
         }
-        const std::uint64_t tag = detail::read_u64(payload.data());
+        const std::uint64_t actual = detail::read_u64(payload.data());
         const std::uint64_t expected = detail::type_tag<T>();
-        if (tag != expected) {
+        if (actual != expected) {
             throw decode_error("simulnetx: decode_error: type tag mismatch (expected " +
-                               std::to_string(expected) + ", got " + std::to_string(tag) +
+                               std::to_string(expected) + ", got " + std::to_string(actual) +
                                "); the message was sent as a different type");
         }
         detail::cursor in(payload.data() + sizeof(std::uint64_t),
