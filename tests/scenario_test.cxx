@@ -320,4 +320,51 @@ TEST(ScenarioTest, SendAtWhileSenderCrashedThrowsInRunUntil) {
     EXPECT_THROW(s.run_until(5s), std::logic_error);
 }
 
+TEST(ScenarioTest, ExpectEventsPassesAndFails) {
+    simulnetx::scenario s("trace expects");
+    s.nodes("A", "B")
+        .link("A", "B", {})
+        .send_at(0s, "A", "B", "x")
+        .send_at(0s, "A", "B", "y")
+        .run_until(1s);
+    s.expect_events(simulnetx::event_kind::sent, 2);
+    s.expect_events(simulnetx::event_kind::delivered, 2);
+    s.expect_events(simulnetx::event_kind::dropped, 0);
+    s.expect_events_between(simulnetx::event_kind::sent, 1, 3);
+    s.expect_events_between(simulnetx::event_kind::timer_fired, 2, 2);
+    EXPECT_THROW(s.expect_events(simulnetx::event_kind::sent, 5),
+                 simulnetx::assertion_failed);
+    EXPECT_THROW(s.expect_events_between(simulnetx::event_kind::dropped, 1, 2),
+                 simulnetx::assertion_failed);
+}
+
+TEST(ScenarioTest, ExpectEventsFailureHasScenarioNameSeedAndTime) {
+    simulnetx::scenario s("naming events");
+    s.seed(42).nodes("A", "B").link("A", "B", {}).run_until(10s);
+    try {
+        s.expect_events(simulnetx::event_kind::sent, 5);
+        FAIL() << "expected assertion_failed";
+    } catch (const simulnetx::assertion_failed& e) {
+        const std::string msg = e.what();
+        EXPECT_NE(msg.find("scenario 'naming events'"), std::string::npos);
+        EXPECT_NE(msg.find("expected event_count(sent) == 5, got 0"), std::string::npos);
+        EXPECT_NE(msg.find("seed 42"), std::string::npos);
+        EXPECT_NE(msg.find("t=10000000000ns"), std::string::npos);
+    }
+}
+
+TEST(ScenarioTest, TraceAndDumpPassthrough) {
+    simulnetx::scenario s("passthrough");
+    s.seed(42).nodes("A", "B").link("A", "B", {.latency = 50ms});
+    s.send_at(0s, "A", "B", "hi");
+    s.run_until(1s);
+    // One send_at timer + one send + one delivery.
+    EXPECT_EQ(s.trace().size(), 3U);
+    EXPECT_EQ(s.dump_trace(),
+              "trace: 3 events (seed 42)\n"
+              "t=0ns timer #0 fired [network]\n"
+              "t=0ns A -> B sent 2 bytes\n"
+              "t=50000000ns A -> B delivered 2 bytes\n");
+}
+
 }  // namespace

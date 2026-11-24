@@ -20,6 +20,7 @@
 #include "simulnetx/node.hxx"
 #include "simulnetx/request.hxx"
 #include "simulnetx/serializer.hxx"
+#include "simulnetx/trace.hxx"
 
 namespace simulnetx {
 
@@ -105,6 +106,12 @@ public:
     // Creates the network (with the default seed 0) if it does not exist yet.
     simulnetx::network& network();
 
+    // The underlying network's event trace (see trace.hxx), and its
+    // human-readable dump. Both create the network if it does not exist
+    // yet, like the network() escape hatch.
+    const std::vector<trace_event>& trace();
+    std::string dump_trace();
+
     // Run the network to virtual time t. Throws std::invalid_argument if t is
     // before the current virtual time.
     scenario& run_until(std::chrono::nanoseconds t);
@@ -182,6 +189,12 @@ public:
     scenario& expect_sent_between(std::size_t lo, std::size_t hi);
     scenario& expect_delivered_between(std::size_t lo, std::size_t hi);
     scenario& expect_dropped_between(std::size_t lo, std::size_t hi);
+
+    // Exact-count and range checks on the trace: how many events of this
+    // kind were recorded. Same failure format as the other expect_* checks
+    // (scenario name prefixed, seed + virtual time included).
+    scenario& expect_events(event_kind kind, std::size_t n);
+    scenario& expect_events_between(event_kind kind, std::size_t lo, std::size_t hi);
 
 private:
     simulnetx::network& ensure_network();

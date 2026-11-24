@@ -102,6 +102,14 @@ simulnetx::network& scenario::network() {
     return ensure_network();
 }
 
+const std::vector<trace_event>& scenario::trace() {
+    return ensure_network().trace();
+}
+
+std::string scenario::dump_trace() {
+    return ensure_network().dump_trace();
+}
+
 scenario& scenario::run_until(std::chrono::nanoseconds t) {
     ensure_network().run_until(t);
     return *this;
@@ -218,6 +226,16 @@ scenario& scenario::expect_delivered_between(std::size_t lo, std::size_t hi) {
 
 scenario& scenario::expect_dropped_between(std::size_t lo, std::size_t hi) {
     check([this, lo, hi] { ensure_network().dropped_count().between(lo, hi); });
+    return *this;
+}
+
+scenario& scenario::expect_events(event_kind kind, std::size_t n) {
+    check([this, kind, n] { ensure_network().event_count(kind).equal(n); });
+    return *this;
+}
+
+scenario& scenario::expect_events_between(event_kind kind, std::size_t lo, std::size_t hi) {
+    check([this, kind, lo, hi] { ensure_network().event_count(kind).between(lo, hi); });
     return *this;
 }
 

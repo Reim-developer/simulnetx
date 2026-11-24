@@ -1,5 +1,6 @@
 #include "simulnetx/network.hxx"
 
+#include <sstream>
 #include <stdexcept>
 #include <utility>
 
@@ -168,6 +169,102 @@ timer_id network::schedule_at(std::chrono::nanoseconds t, std::function<void()> 
         cb();
     });
     return id;
+}
+
+expectation<std::size_t> network::event_count(event_kind kind) const {
+    std::size_t count = 0;
+    for (const trace_event& event : trace_) {
+        if (event.kind == kind) {
+            ++count;
+        }
+    }
+    return expectation<std::size_t>(
+        count, std::string("event_count(") + event_kind_name(kind) + ")",
+        detail::sim_context{seed_, now_});
+}
+
+std::string network::node_name(node_id id) const {
+    if (id < nodes_.size()) {
+        return nodes_[id]->name();
+    }
+    return "node#" + std::to_string(id);
+}
+
+void network::write_event(std::ostream& out, const trace_event& event) const {
+    out << "t=" << event.at.count() << "ns ";
+    switch (event.kind) {
+        case event_kind::sent:
+        case event_kind::delivered:
+        case event_kind::duplicated:
+        case event_kind::reordered:
+            out << node_name(event.from) << " -> " << node_name(event.to) << " "
+                << event_kind_name(event.kind) << " " << event.bytes << " bytes";
+            if (event.tag != 0) {
+                out << " [tag=" << event.tag << "]";
+            }
+            break;
+        case event_kind::dropped:
+            out << node_name(event.from) << " -> " << node_name(event.to) << " dropped ("
+                << drop_reason_name(event.reason) << ") " << event.bytes << " bytes";
+            if (event.tag != 0) {
+                out << " [tag=" << event.tag << "]";
+            }
+            break;
+        case event_kind::timer_fired:
+            out << "timer #" << event.timer << " fired ";
+            if (event.node == no_node) {
+                out << "[network]";
+            } else {
+                out << "[node " << node_name(event.node) << "]";
+            }
+            break;
+        case event_kind::node_crashed:
+            out << "node " << node_name(event.node) << " crashed";
+            break;
+        case event_kind::node_restarted:
+            out << "node " << node_name(event.node) << " restarted";
+            break;
+        case event_kind::partitioned:
+            out << "partition started";
+            break;
+        case event_kind::healed:
+            out << "partition healed";
+            break;
+        case event_kind::request_sent:
+            out << node_name(event.from) << " -> " << node_name(event.to) << " request #"
+                << event.request_id << " sent (attempt " << event.attempt << ")";
+            break;
+        case event_kind::response_received:
+            out << node_name(event.from) << " -> " << node_name(event.to) << " response #"
+                << event.request_id << " received";
+            break;
+        case event_kind::request_timeout:
+            out << "node " << node_name(event.node) << " request #" << event.request_id
+                << " timed out";
+            break;
+    }
+}
+
+std::string network::dump_trace() const {
+    std::ostringstream oss;
+    dump_trace(oss);
+    return oss.str();
+}
+
+void network::dump_trace(std::ostream& out) const {
+    // '\n', never std::endl: endl flushes per line, which would kill
+    // throughput on a big trace. The caller flushes when they want to.
+    out << "trace: " << trace_.size() << " events (seed " << seed_ << ")\n";
+    for (const trace_event& event : trace_) {
+        write_event(out, event);
+        out << '\n';
+    }
+}
+
+std::string network::format_event(const trace_event& event) const {
+    std::ostringstream oss;
+    write_event(oss, event);
+    return oss.str();
 }
 
 expectation<std::size_t> network::sent_count() const {

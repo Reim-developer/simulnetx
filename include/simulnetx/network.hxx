@@ -6,6 +6,7 @@
 #include <functional>
 #include <map>
 #include <memory>
+#include <ostream>
 #include <queue>
 #include <string>
 #include <unordered_set>
@@ -147,6 +148,26 @@ public:
     void set_tracing(bool enabled) { tracing_ = enabled; }
     bool tracing() const { return tracing_; }
 
+    // How many events of this kind were recorded, as a checkable
+    // expectation (seed + virtual time in failures, like the counts).
+    // Scans the trace, so it cannot desync from it.
+    expectation<std::size_t> event_count(event_kind kind) const;
+
+    // Human-readable dump with node names resolved, one event per line.
+    // Deterministic: the same seed + scenario produces the same string.
+    // Two deliveries, one implementation (write_event, below): the
+    // string version streams into an ostringstream; the stream version
+    // writes incrementally, so a huge trace never needs one giant string.
+    std::string dump_trace() const;
+    void dump_trace(std::ostream& out) const;
+
+    // Format ONE event as a single line (no trailing newline), with node
+    // names resolved. For filtered dumps: iterate trace(), pick the
+    // events you want, format each. Only format events from THIS
+    // network's trace — another network's ids would resolve to this
+    // network's names. An out-of-range node id prints as node#<id>.
+    std::string format_event(const trace_event& event) const;
+
 private:
     friend class node;
 
@@ -178,6 +199,15 @@ private:
             trace_.push_back(event);
         }
     }
+
+    // THE format implementation: write one event as one line (no trailing
+    // newline) to the stream. All three public formatting APIs delegate
+    // here, so the format cannot drift between them. Streams the parts
+    // directly — no per-line string allocation in the dump loop.
+    void write_event(std::ostream& out, const trace_event& event) const;
+
+    // A node's name, or node#<id> for an out-of-range id (fail-soft).
+    std::string node_name(node_id id) const;
 
     void send_from(node_id from, node_id to, std::vector<std::byte> payload,
                    std::uint64_t tag = 0);
