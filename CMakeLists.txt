@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(simulnetx VERSION 0.4.0 LANGUAGES CXX)
+project(simulnetx VERSION 0.5.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -104,5 +104,14 @@ if(SIMULNETX_BUILD_EXAMPLES)
         target_compile_options(typed_ping_pong PRIVATE /W4 /WX)
     else()
         target_compile_options(typed_ping_pong PRIVATE -Wall -Wextra -Werror)
+    endif()
+
+    add_executable(trace_retry examples/trace_retry.cxx)
+    target_link_libraries(trace_retry PRIVATE simulnetx)
+
+    if(MSVC)
+        target_compile_options(trace_retry PRIVATE /W4 /WX)
+    else()
+        target_compile_options(trace_retry PRIVATE -Wall -Wextra -Werror)
     endif()
 endif()
