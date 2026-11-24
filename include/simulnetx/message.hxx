@@ -19,10 +19,16 @@ using node_id = std::uint32_t;
 // Typed messages (sent with node::send<T>) carry an 8-byte type tag first,
 // then the serialized value. as<T>() checks the tag and decodes; a raw
 // message has no tag, so as<T>() on one throws decode_error.
+//
+// tag is transport metadata, set by the sender at send time: the type tag
+// the sender declared (0 for raw sends). It mirrors the first 8 payload
+// bytes for typed messages but is recorded separately so the network never
+// has to parse payloads (e.g. for trace events at delivery time).
 struct message {
     node_id from;
     node_id to;
     std::vector<std::byte> payload;
+    std::uint64_t tag{0};
 
     // Decode this message as a value of type T. Throws decode_error on a
     // tag mismatch (the message was sent as a different type, or is a raw

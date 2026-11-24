@@ -72,8 +72,9 @@ public:
         serializer<T>::encode(value, payload);
         // The non-template byte overload wins overload resolution over this
         // template (same conversion, non-template preferred), so this
-        // delegates to the raw send rather than recursing.
-        send(to, std::move(payload));
+        // delegates to the raw send rather than recursing. The tag travels
+        // with the message so the trace can show it at delivery time.
+        send_with_tag(to, std::move(payload), detail::type_tag<T>());
     }
 
     // Schedule a callback at the current virtual time + delay. Callbacks may
@@ -152,7 +153,7 @@ public:
                 detail::append_u64(payload, id);
                 detail::append_u64(payload, detail::type_tag<Resp>());
                 serializer<Resp>::encode(resp, payload);
-                send(msg.from, std::move(payload));
+                send_with_tag(msg.from, std::move(payload), detail::type_tag<Resp>());
             };
     }
 
@@ -185,6 +186,10 @@ private:
     // (late or duplicate) is ignored.
     void dispatch_request(const message& msg);
     void dispatch_response(const message& msg);
+
+    // Send with a declared type tag (0 for raw sends). The tag travels
+    // with the message so the trace can show it at delivery time.
+    void send_with_tag(node_id to, std::vector<std::byte> payload, std::uint64_t tag);
 
     // Send a request envelope: [request_envelope_tag][id][req_tag][payload].
     void send_request_envelope(std::uint64_t id, node_id to, std::uint64_t req_tag,

@@ -162,7 +162,8 @@ expectation<std::size_t> network::dropped_count() const {
     return expectation<std::size_t>(dropped_, "dropped_count", detail::sim_context{seed_, now_});
 }
 
-void network::send_from(node_id from, node_id to, std::vector<std::byte> payload) {
+void network::send_from(node_id from, node_id to, std::vector<std::byte> payload,
+                        std::uint64_t tag) {
     if (to >= nodes_.size()) {
         throw std::invalid_argument("simulnetx: send to unknown node id");
     }
@@ -174,7 +175,14 @@ void network::send_from(node_id from, node_id to, std::vector<std::byte> payload
     // Self-send: no link needed, delivers at the current virtual time.
     if (from == to) {
         ++sent_;
+        const std::size_t bytes = payload.size();
         message msg{from, to, std::move(payload)};
+        msg.tag = tag;
+        record(trace_event{.kind = event_kind::sent,
+                           .from = from,
+                           .to = to,
+                           .bytes = bytes,
+                           .tag = tag});
         schedule(now_, [this, msg = std::move(msg)] { deliver(msg); });
         return;
     }
@@ -184,12 +192,24 @@ void network::send_from(node_id from, node_id to, std::vector<std::byte> payload
         throw std::invalid_argument("simulnetx: no link between the sending and receiving nodes");
     }
     const link_config cfg = it->second;
+    const std::size_t bytes = payload.size();
     ++sent_;
+    record(trace_event{.kind = event_kind::sent,
+                       .from = from,
+                       .to = to,
+                       .bytes = bytes,
+                       .tag = tag});
 
     // Partitioned at send time: the message never enters the network, and no
     // RNG draws are consumed for it.
     if (partitioned_between(from, to)) {
         ++dropped_;
+        record(trace_event{.kind = event_kind::dropped,
+                           .from = from,
+                           .to = to,
+                           .bytes = bytes,
+                           .tag = tag,
+                           .reason = drop_reason::partition});
         return;
     }
 
@@ -197,6 +217,12 @@ void network::send_from(node_id from, node_id to, std::vector<std::byte> payload
     // RNG draws consumed.
     if (crashed_.contains(to)) {
         ++dropped_;
+        record(trace_event{.kind = event_kind::dropped,
+                           .from = from,
+                           .to = to,
+                           .bytes = bytes,
+                           .tag = tag,
+                           .reason = drop_reason::crashed});
         return;
     }
 
@@ -205,6 +231,12 @@ void network::send_from(node_id from, node_id to, std::vector<std::byte> payload
     // so enabling a feature does not change the stream of the others.
     if (cfg.loss_rate > 0.0 && rng_.next_double() < cfg.loss_rate) {
         ++dropped_;
+        record(trace_event{.kind = event_kind::dropped,
+                           .from = from,
+                           .to = to,
+                           .bytes = bytes,
+                           .tag = tag,
+                           .reason = drop_reason::loss});
         return;
     }
 
@@ -212,18 +244,37 @@ void network::send_from(node_id from, node_id to, std::vector<std::byte> payload
 
     const bool duplicate = cfg.dup_rate > 0.0 && rng_.next_double() < cfg.dup_rate;
 
+    bool reordered = false;
     if (cfg.reorder_rate > 0.0 && rng_.next_double() < cfg.reorder_rate) {
         // Reorder adds a second jitter-range delay, so the message may arrive
         // after a later-sent one. No visible effect when jitter is zero.
         extra_delay += sample_delay(cfg.jitter);
+        reordered = true;
+    }
+
+    if (duplicate) {
+        record(trace_event{.kind = event_kind::duplicated,
+                           .from = from,
+                           .to = to,
+                           .bytes = bytes,
+                           .tag = tag});
+    }
+    if (reordered) {
+        record(trace_event{.kind = event_kind::reordered,
+                           .from = from,
+                           .to = to,
+                           .bytes = bytes,
+                           .tag = tag});
     }
 
     const std::chrono::nanoseconds arrival = now_ + cfg.latency + extra_delay;
     message msg{from, to, std::move(payload)};
+    msg.tag = tag;
     if (duplicate) {
         // The second copy is identical and arrives 1ns after the first.
         // (Built before msg moves into the delivery lambda below.)
         message copy{from, to, msg.payload};
+        copy.tag = tag;
         schedule(arrival + std::chrono::nanoseconds{1},
                  [this, copy = std::move(copy)] { deliver(copy); });
     }
@@ -257,6 +308,12 @@ void network::deliver(const message& msg) {
     // partition started is lost.
     if (partitioned_between(msg.from, msg.to)) {
         ++dropped_;
+        record(trace_event{.kind = event_kind::dropped,
+                           .from = msg.from,
+                           .to = msg.to,
+                           .bytes = msg.payload.size(),
+                           .tag = msg.tag,
+                           .reason = drop_reason::partition});
         return;
     }
     // Destination crashed at delivery time: a message that was in flight
@@ -265,9 +322,20 @@ void network::deliver(const message& msg) {
     // when the message was sent.
     if (crashed_.contains(msg.to)) {
         ++dropped_;
+        record(trace_event{.kind = event_kind::dropped,
+                           .from = msg.from,
+                           .to = msg.to,
+                           .bytes = msg.payload.size(),
+                           .tag = msg.tag,
+                           .reason = drop_reason::crashed});
         return;
     }
     ++delivered_;
+    record(trace_event{.kind = event_kind::delivered,
+                       .from = msg.from,
+                       .to = msg.to,
+                       .bytes = msg.payload.size(),
+                       .tag = msg.tag});
     if (nodes_[msg.to]->deliver(msg)) {
         return;
     }

@@ -14,7 +14,11 @@ void node::on_message(std::function<void(const message&)> handler) {
 }
 
 void node::send(node_id to, std::vector<std::byte> payload) {
-    owner_->send_from(id_, to, std::move(payload));
+    send_with_tag(to, std::move(payload), 0);
+}
+
+void node::send_with_tag(node_id to, std::vector<std::byte> payload, std::uint64_t tag) {
+    owner_->send_from(id_, to, std::move(payload), tag);
 }
 
 void node::send(node_id to, std::string_view payload) {
@@ -100,7 +104,7 @@ void node::send_request_envelope(std::uint64_t id, node_id to, std::uint64_t req
     detail::append_u64(payload, id);
     detail::append_u64(payload, req_tag);
     detail::append_bytes(payload, req_bytes.data(), req_bytes.size());
-    send(to, std::move(payload));
+    send_with_tag(to, std::move(payload), req_tag);
 }
 
 void node::cancel_pending_requests() {

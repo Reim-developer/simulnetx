@@ -17,6 +17,7 @@
 #include "simulnetx/message.hxx"
 #include "simulnetx/node.hxx"
 #include "simulnetx/rng.hxx"
+#include "simulnetx/trace.hxx"
 
 namespace simulnetx {
 
@@ -130,6 +131,21 @@ public:
     expectation<std::size_t> delivered_count() const;
     expectation<std::size_t> dropped_count() const;
 
+    // The event trace: an ordered log of everything the simulation did
+    // (see trace.hxx). A live view: the vector grows as the sim runs. The
+    // reference stays valid; iterators may invalidate on growth (standard
+    // vector caveat). Tracing is a pure observer: recording consumes no
+    // RNG draws and never affects scheduling, counts, deliveries or drops.
+    const std::vector<trace_event>& trace() const { return trace_; }
+
+    // Drop all recorded events.
+    void clear_trace() { trace_.clear(); }
+
+    // Tracing is ON by default. set_tracing(false) stops recording
+    // (already-recorded events are kept); re-enabling resumes.
+    void set_tracing(bool enabled) { tracing_ = enabled; }
+    bool tracing() const { return tracing_; }
+
 private:
     friend class node;
 
@@ -153,7 +169,17 @@ private:
         }
     };
 
-    void send_from(node_id from, node_id to, std::vector<std::byte> payload);
+    // Record one event, stamped with the current virtual time. A no-op
+    // when tracing is disabled. Consumes no RNG draws.
+    void record(trace_event event) {
+        if (tracing_) {
+            event.at = now_;
+            trace_.push_back(event);
+        }
+    }
+
+    void send_from(node_id from, node_id to, std::vector<std::byte> payload,
+                   std::uint64_t tag = 0);
     // Schedule a timer owned by one node. The callback captures the node's
     // generation at schedule time and no-ops if the generation changed
     // (i.e. the node crashed in between), so node timers are cancelled by a
@@ -192,6 +218,10 @@ private:
     std::size_t sent_{0};
     std::size_t delivered_{0};
     std::size_t dropped_{0};
+
+    // The event trace (on by default).
+    std::vector<trace_event> trace_;
+    bool tracing_{true};
 
     // Strict tag dispatch; see set_strict_tags. Default true.
     bool strict_tags_{true};
