@@ -14,6 +14,7 @@
 #include "simulnetx/message.hxx"
 #include "simulnetx/request.hxx"
 #include "simulnetx/serializer.hxx"
+#include "simulnetx/trace.hxx"
 
 namespace simulnetx {
 
@@ -78,10 +79,11 @@ public:
     }
 
     // Schedule a callback at the current virtual time + delay. Callbacks may
-    // send messages and schedule further timers. Throws std::logic_error if
-    // this node is crashed. A timer scheduled before a crash never fires,
-    // even if the node restarts before its fire time.
-    void after(std::chrono::nanoseconds delay, std::function<void()> callback);
+    // send messages and schedule further timers. Returns the timer's id
+    // (see trace.hxx). Throws std::logic_error if this node is crashed. A
+    // timer scheduled before a crash never fires, even if the node restarts
+    // before its fire time.
+    timer_id after(std::chrono::nanoseconds delay, std::function<void()> callback);
 
     // Send a typed request and get a handle for configuring retries, a
     // timeout, and the callbacks (see request_handle). The first request

@@ -101,14 +101,15 @@ public:
     // Schedule a callback at the current virtual time + delay. Network timers
     // are infrastructure, not node behavior: they are NOT cancelled by node
     // crashes, and they need no node to exist. Callbacks may send messages,
-    // schedule further timers and crash/restart nodes. Throws
-    // std::invalid_argument for a negative delay.
-    void after(std::chrono::nanoseconds delay, std::function<void()> callback);
+    // schedule further timers and crash/restart nodes. Returns the timer's
+    // id (see trace.hxx); the id appears in the timer_fired trace event.
+    // Throws std::invalid_argument for a negative delay.
+    timer_id after(std::chrono::nanoseconds delay, std::function<void()> callback);
 
     // Schedule a callback at absolute virtual time t. Same crash immunity as
-    // after(). Throws std::invalid_argument if t is before the current
-    // virtual time.
-    void schedule_at(std::chrono::nanoseconds t, std::function<void()> callback);
+    // after(). Returns the timer's id. Throws std::invalid_argument if t is
+    // before the current virtual time.
+    timer_id schedule_at(std::chrono::nanoseconds t, std::function<void()> callback);
 
     // Current virtual time.
     std::chrono::nanoseconds now() const { return now_; }
@@ -183,10 +184,11 @@ private:
     // Schedule a timer owned by one node. The callback captures the node's
     // generation at schedule time and no-ops if the generation changed
     // (i.e. the node crashed in between), so node timers are cancelled by a
-    // crash and never restored by a restart. Throws std::logic_error if the
-    // node is currently crashed, std::invalid_argument for a negative delay.
-    void schedule_node_timer(node_id owner, std::chrono::nanoseconds delay,
-                             std::function<void()> callback);
+    // crash and never restored by a restart. Returns the timer's id.
+    // Throws std::logic_error if the node is currently crashed,
+    // std::invalid_argument for a negative delay.
+    timer_id schedule_node_timer(node_id owner, std::chrono::nanoseconds delay,
+                                 std::function<void()> callback);
     void schedule(std::chrono::nanoseconds time, std::function<void()> action);
     void deliver(const message& msg);
 
@@ -219,9 +221,12 @@ private:
     std::size_t delivered_{0};
     std::size_t dropped_{0};
 
-    // The event trace (on by default).
+    // The event trace (on by default) and the timer-id counter. Timer ids
+    // are unique across node and network timers: one counter, one choke
+    // point.
     std::vector<trace_event> trace_;
     bool tracing_{true};
+    timer_id next_timer_id_{0};
 
     // Strict tag dispatch; see set_strict_tags. Default true.
     bool strict_tags_{true};

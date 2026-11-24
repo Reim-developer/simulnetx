@@ -30,8 +30,8 @@ void node::send(node_id to, std::string_view payload) {
     send(to, std::move(bytes));
 }
 
-void node::after(std::chrono::nanoseconds delay, std::function<void()> callback) {
-    owner_->schedule_node_timer(id_, delay, std::move(callback));
+timer_id node::after(std::chrono::nanoseconds delay, std::function<void()> callback) {
+    return owner_->schedule_node_timer(id_, delay, std::move(callback));
 }
 
 bool node::deliver(const message& msg) {

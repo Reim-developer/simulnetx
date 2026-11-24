@@ -77,11 +77,16 @@ void network::partition(std::vector<node_id> group_a, std::vector<node_id> group
     }
     partition_a_ = a;
     partition_b_ = b;
+    record(trace_event{.kind = event_kind::partitioned});
 }
 
 void network::heal() {
+    if (partition_a_.empty() && partition_b_.empty()) {
+        return;  // No partition active: a no-op, like restarting a live node.
+    }
     partition_a_.clear();
     partition_b_.clear();
+    record(trace_event{.kind = event_kind::healed});
 }
 
 void network::crash(node_id id) {
@@ -100,13 +105,18 @@ void network::crash(node_id id) {
     // must not fire, and its retry/timeout timers are already cancelled
     // by the generation bump above.
     nodes_[id]->cancel_pending_requests();
+    record(trace_event{.kind = event_kind::node_crashed, .node = id});
 }
 
 void network::restart(node_id id) {
     if (id >= nodes_.size()) {
         throw std::invalid_argument("simulnetx: restart references an unknown node id");
     }
+    if (!crashed_.contains(id)) {
+        return;  // Restarting a live node is a no-op.
+    }
     crashed_.erase(id);
+    record(trace_event{.kind = event_kind::node_restarted, .node = id});
 }
 
 bool network::is_crashed(node_id id) const {
@@ -136,18 +146,28 @@ void network::run_for(std::chrono::nanoseconds d) {
     run_until(now_ + d);
 }
 
-void network::after(std::chrono::nanoseconds delay, std::function<void()> callback) {
+timer_id network::after(std::chrono::nanoseconds delay, std::function<void()> callback) {
     if (delay.count() < 0) {
         throw std::invalid_argument("simulnetx: timer delay must be non-negative");
     }
-    schedule(now_ + delay, std::move(callback));
+    const timer_id id = next_timer_id_++;
+    schedule(now_ + delay, [this, id, cb = std::move(callback)] {
+        record(trace_event{.kind = event_kind::timer_fired, .timer = id, .node = no_node});
+        cb();
+    });
+    return id;
 }
 
-void network::schedule_at(std::chrono::nanoseconds t, std::function<void()> callback) {
+timer_id network::schedule_at(std::chrono::nanoseconds t, std::function<void()> callback) {
     if (t < now_) {
         throw std::invalid_argument("simulnetx: schedule_at time is before the current virtual time");
     }
-    schedule(t, std::move(callback));
+    const timer_id id = next_timer_id_++;
+    schedule(t, [this, id, cb = std::move(callback)] {
+        record(trace_event{.kind = event_kind::timer_fired, .timer = id, .node = no_node});
+        cb();
+    });
+    return id;
 }
 
 expectation<std::size_t> network::sent_count() const {
@@ -281,8 +301,8 @@ void network::send_from(node_id from, node_id to, std::vector<std::byte> payload
     schedule(arrival, [this, msg = std::move(msg)] { deliver(msg); });
 }
 
-void network::schedule_node_timer(node_id owner, std::chrono::nanoseconds delay,
-                                  std::function<void()> callback) {
+timer_id network::schedule_node_timer(node_id owner, std::chrono::nanoseconds delay,
+                                      std::function<void()> callback) {
     if (delay.count() < 0) {
         throw std::invalid_argument("simulnetx: timer delay must be non-negative");
     }
@@ -290,13 +310,16 @@ void network::schedule_node_timer(node_id owner, std::chrono::nanoseconds delay,
         throw std::logic_error("simulnetx: cannot schedule a timer on a crashed node");
     }
     const std::uint64_t generation = generations_[owner];
-    schedule(now_ + delay, [this, owner, generation, cb = std::move(callback)] {
+    const timer_id id = next_timer_id_++;
+    schedule(now_ + delay, [this, owner, generation, id, cb = std::move(callback)] {
         // The node crashed (and possibly restarted) since this timer was
         // scheduled: the timer belonged to the dead incarnation and is gone.
         if (generations_[owner] == generation) {
+            record(trace_event{.kind = event_kind::timer_fired, .timer = id, .node = owner});
             cb();
         }
     });
+    return id;
 }
 
 void network::schedule(std::chrono::nanoseconds time, std::function<void()> action) {

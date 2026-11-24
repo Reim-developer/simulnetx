@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cstddef>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -116,14 +117,15 @@ TEST(TraceTest, PartitionDropsAtSendTime) {
     net.run_for(1s);
 
     const std::vector<trace_event>& trace = net.trace();
-    ASSERT_EQ(trace.size(), 2U);
-    EXPECT_EQ(trace[0].kind, event_kind::sent);
-    EXPECT_EQ(trace[1].kind, event_kind::dropped);
-    EXPECT_EQ(trace[1].reason, drop_reason::partition);
-    EXPECT_EQ(trace[1].at, 0ns);
-    EXPECT_EQ(trace[1].from, a.id());
-    EXPECT_EQ(trace[1].to, b.id());
-    EXPECT_EQ(trace[1].bytes, 4U);
+    ASSERT_EQ(trace.size(), 3U);
+    EXPECT_EQ(trace[0].kind, event_kind::partitioned);
+    EXPECT_EQ(trace[1].kind, event_kind::sent);
+    EXPECT_EQ(trace[2].kind, event_kind::dropped);
+    EXPECT_EQ(trace[2].reason, drop_reason::partition);
+    EXPECT_EQ(trace[2].at, 0ns);
+    EXPECT_EQ(trace[2].from, a.id());
+    EXPECT_EQ(trace[2].to, b.id());
+    EXPECT_EQ(trace[2].bytes, 4U);
 }
 
 TEST(TraceTest, PartitionDropsInFlightAtDeliveryTime) {
@@ -136,12 +138,15 @@ TEST(TraceTest, PartitionDropsInFlightAtDeliveryTime) {
     net.run_for(1s);
 
     const std::vector<trace_event>& trace = net.trace();
-    ASSERT_EQ(trace.size(), 2U);
+    ASSERT_EQ(trace.size(), 4U);
     EXPECT_EQ(trace[0].kind, event_kind::sent);
     EXPECT_EQ(trace[0].at, 0ns);
-    EXPECT_EQ(trace[1].kind, event_kind::dropped);
-    EXPECT_EQ(trace[1].reason, drop_reason::partition);
-    EXPECT_EQ(trace[1].at, 100ms);
+    EXPECT_EQ(trace[1].kind, event_kind::timer_fired);
+    EXPECT_EQ(trace[2].kind, event_kind::partitioned);
+    EXPECT_EQ(trace[2].at, 50ms);
+    EXPECT_EQ(trace[3].kind, event_kind::dropped);
+    EXPECT_EQ(trace[3].reason, drop_reason::partition);
+    EXPECT_EQ(trace[3].at, 100ms);
 }
 
 TEST(TraceTest, CrashedDestinationDropsAtSendTime) {
@@ -154,10 +159,12 @@ TEST(TraceTest, CrashedDestinationDropsAtSendTime) {
     net.run_for(1s);
 
     const std::vector<trace_event>& trace = net.trace();
-    ASSERT_EQ(trace.size(), 2U);
-    EXPECT_EQ(trace[1].kind, event_kind::dropped);
-    EXPECT_EQ(trace[1].reason, drop_reason::crashed);
-    EXPECT_EQ(trace[1].at, 0ns);
+    ASSERT_EQ(trace.size(), 3U);
+    EXPECT_EQ(trace[0].kind, event_kind::node_crashed);
+    EXPECT_EQ(trace[1].kind, event_kind::sent);
+    EXPECT_EQ(trace[2].kind, event_kind::dropped);
+    EXPECT_EQ(trace[2].reason, drop_reason::crashed);
+    EXPECT_EQ(trace[2].at, 0ns);
 }
 
 TEST(TraceTest, CrashedDestinationDropsInFlightAtDeliveryTime) {
@@ -170,10 +177,14 @@ TEST(TraceTest, CrashedDestinationDropsInFlightAtDeliveryTime) {
     net.run_for(1s);
 
     const std::vector<trace_event>& trace = net.trace();
-    ASSERT_EQ(trace.size(), 2U);
-    EXPECT_EQ(trace[1].kind, event_kind::dropped);
-    EXPECT_EQ(trace[1].reason, drop_reason::crashed);
-    EXPECT_EQ(trace[1].at, 100ms);
+    ASSERT_EQ(trace.size(), 4U);
+    EXPECT_EQ(trace[0].kind, event_kind::sent);
+    EXPECT_EQ(trace[1].kind, event_kind::timer_fired);
+    EXPECT_EQ(trace[2].kind, event_kind::node_crashed);
+    EXPECT_EQ(trace[2].at, 50ms);
+    EXPECT_EQ(trace[3].kind, event_kind::dropped);
+    EXPECT_EQ(trace[3].reason, drop_reason::crashed);
+    EXPECT_EQ(trace[3].at, 100ms);
 }
 
 TEST(TraceTest, SelfSendRecordsSentAndDelivered) {
@@ -317,6 +328,193 @@ TEST(TraceTest, TraceSurvivesException) {
     ASSERT_EQ(trace.size(), 2U);
     EXPECT_EQ(trace[0].kind, event_kind::sent);
     EXPECT_EQ(trace[1].kind, event_kind::delivered);
+}
+
+TEST(TraceTest, TimerIdsAreUniqueAndIncreasing) {
+    simulnetx::network net(42);
+    auto& a = net.add_node("A");
+    auto& b = net.add_node("B");
+    // One counter for node and network timers: ids come out in schedule
+    // order across both kinds.
+    EXPECT_EQ(net.after(1s, [] {}), 0U);
+    EXPECT_EQ(a.after(1s, [] {}), 1U);
+    EXPECT_EQ(net.schedule_at(2s, [] {}), 2U);
+    EXPECT_EQ(b.after(1s, [] {}), 3U);
+    EXPECT_EQ(net.after(1s, [] {}), 4U);
+}
+
+TEST(TraceTest, TimerFiredEventCarriesIdAndOwner) {
+    simulnetx::network net(42);
+    auto& a = net.add_node("A");
+    const simulnetx::timer_id node_timer = a.after(100ms, [] {});
+    const simulnetx::timer_id net_timer = net.after(200ms, [] {});
+    net.run_for(1s);
+
+    const std::vector<trace_event>& trace = net.trace();
+    ASSERT_EQ(count_kind(trace, event_kind::timer_fired), 2U);
+    const auto node_event = std::find_if(trace.begin(), trace.end(),
+                                         [node_timer](const trace_event& e) {
+                                             return e.kind == event_kind::timer_fired &&
+                                                    e.timer == node_timer;
+                                         });
+    ASSERT_NE(node_event, trace.end());
+    EXPECT_EQ(node_event->at, 100ms);
+    EXPECT_EQ(node_event->node, a.id());
+    const auto net_event = std::find_if(trace.begin(), trace.end(),
+                                        [net_timer](const trace_event& e) {
+                                            return e.kind == event_kind::timer_fired &&
+                                                   e.timer == net_timer;
+                                        });
+    ASSERT_NE(net_event, trace.end());
+    EXPECT_EQ(net_event->at, 200ms);
+    EXPECT_EQ(net_event->node, simulnetx::no_node);
+}
+
+TEST(TraceTest, CrashedNodeTimerFiresNoEvent) {
+    simulnetx::network net(42);
+    auto& a = net.add_node("A");
+    bool fired = false;
+    const simulnetx::timer_id id = a.after(100ms, [&] { fired = true; });
+    net.after(50ms, [&] { net.crash(a.id()); });
+    net.run_for(1s);
+
+    EXPECT_FALSE(fired);
+    const std::vector<trace_event>& trace = net.trace();
+    EXPECT_EQ(count_kind(trace, event_kind::timer_fired), 1U);  // the crash timer only
+    const auto event = std::find_if(trace.begin(), trace.end(), [id](const trace_event& e) {
+        return e.kind == event_kind::timer_fired && e.timer == id;
+    });
+    EXPECT_EQ(event, trace.end());
+    // The crash itself is recorded, which is what explains the absence.
+    EXPECT_EQ(count_kind(trace, event_kind::node_crashed), 1U);
+}
+
+TEST(TraceTest, NetworkTimerSurvivesCrash) {
+    simulnetx::network net(42);
+    auto& a = net.add_node("A");
+    bool fired = false;
+    const simulnetx::timer_id id = net.after(100ms, [&] { fired = true; });
+    net.crash(a.id());
+    net.run_for(1s);
+
+    EXPECT_TRUE(fired);
+    const std::vector<trace_event>& trace = net.trace();
+    const auto event = std::find_if(trace.begin(), trace.end(), [id](const trace_event& e) {
+        return e.kind == event_kind::timer_fired && e.timer == id;
+    });
+    ASSERT_NE(event, trace.end());
+    EXPECT_EQ(event->node, simulnetx::no_node);
+}
+
+TEST(TraceTest, CrashRestartEventsAtRightTimes) {
+    simulnetx::network net(42);
+    auto& a = net.add_node("A");
+    auto& b = net.add_node("B");
+    net.after(100ms, [&] { net.crash(b.id()); });
+    net.after(200ms, [&] { net.restart(b.id()); });
+    net.after(300ms, [&] { net.crash(b.id()); });
+    net.after(400ms, [&] { net.crash(b.id()); });    // crash-when-crashed: no event
+    net.after(500ms, [&] { net.restart(b.id()); });
+    net.after(600ms, [&] { net.restart(b.id()); });  // restart-when-live: no event
+    net.run_for(1s);
+    (void)a;
+
+    const std::vector<trace_event>& trace = net.trace();
+    EXPECT_EQ(count_kind(trace, event_kind::node_crashed), 2U);
+    EXPECT_EQ(count_kind(trace, event_kind::node_restarted), 2U);
+    const auto crash = std::find_if(trace.begin(), trace.end(), [](const trace_event& e) {
+        return e.kind == event_kind::node_crashed;
+    });
+    ASSERT_NE(crash, trace.end());
+    EXPECT_EQ(crash->at, 100ms);
+    EXPECT_EQ(crash->node, b.id());
+    const auto restart = std::find_if(trace.begin(), trace.end(), [](const trace_event& e) {
+        return e.kind == event_kind::node_restarted;
+    });
+    ASSERT_NE(restart, trace.end());
+    EXPECT_EQ(restart->at, 200ms);
+    EXPECT_EQ(restart->node, b.id());
+}
+
+TEST(TraceTest, PartitionHealEventsAtRightTimes) {
+    simulnetx::network net(42);
+    auto& a = net.add_node("A");
+    auto& b = net.add_node("B");
+    net.after(100ms, [&] { net.partition({a.id()}, {b.id()}); });
+    net.after(200ms, [&] { net.heal(); });
+    net.after(300ms, [&] { net.heal(); });  // heal-with-no-partition: no event
+    net.run_for(1s);
+
+    const std::vector<trace_event>& trace = net.trace();
+    EXPECT_EQ(count_kind(trace, event_kind::partitioned), 1U);
+    EXPECT_EQ(count_kind(trace, event_kind::healed), 1U);
+    const auto partitioned = std::find_if(trace.begin(), trace.end(), [](const trace_event& e) {
+        return e.kind == event_kind::partitioned;
+    });
+    ASSERT_NE(partitioned, trace.end());
+    EXPECT_EQ(partitioned->at, 100ms);
+    const auto healed = std::find_if(trace.begin(), trace.end(), [](const trace_event& e) {
+        return e.kind == event_kind::healed;
+    });
+    ASSERT_NE(healed, trace.end());
+    EXPECT_EQ(healed->at, 200ms);
+}
+
+TEST(TraceTest, RetryScenarioTraceIs52Events) {
+    // The canonical retry scenario (examples/retry_under_loss.cxx):
+    // A pings B every 100ms until the ack arrives; 30% loss both ways;
+    // partitioned 200ms-1s. The design predicts exactly 52 events.
+    simulnetx::network net(42);
+    auto& a = net.add_node("A");
+    auto& b = net.add_node("B");
+    net.link(a.id(), b.id(), {.latency = 20ms, .loss_rate = 0.3});
+
+    bool acked = false;
+    long long acked_at = -1;
+    int attempts = 0;
+    b.on_message([&](const simulnetx::message& m) {
+        if (m.payload.size() == 4) {  // "ping"
+            b.send(a.id(), "ack");
+        }
+    });
+    a.on_message([&](const simulnetx::message& m) {
+        if (m.payload.size() == 3) {  // "ack"
+            acked = true;
+            acked_at = net.now().count();
+        }
+    });
+
+    std::function<void()> retry;
+    retry = [&] {
+        if (acked) {
+            return;
+        }
+        ++attempts;
+        a.send(b.id(), "ping");
+        a.after(100ms, retry);
+    };
+    a.after(0ns, retry);
+    a.after(200ms, [&] { net.partition({a.id()}, {b.id()}); });
+    a.after(1s, [&] { net.heal(); });
+    net.run_for(5s);
+
+    EXPECT_TRUE(acked);
+    EXPECT_EQ(attempts, 13);
+    EXPECT_EQ(acked_at, 1240000000LL);
+
+    const std::vector<trace_event>& trace = net.trace();
+    ASSERT_EQ(trace.size(), 52U);
+    EXPECT_EQ(count_kind(trace, event_kind::sent), 17U);
+    EXPECT_EQ(count_kind(trace, event_kind::delivered), 5U);
+    EXPECT_EQ(count_kind(trace, event_kind::dropped), 12U);
+    EXPECT_EQ(count_kind(trace, event_kind::timer_fired), 16U);
+    EXPECT_EQ(count_kind(trace, event_kind::partitioned), 1U);
+    EXPECT_EQ(count_kind(trace, event_kind::healed), 1U);
+    // The 8 partition-window pings vs the 4 loss drops: the reason IS the
+    // diagnosis.
+    EXPECT_EQ(count_drops_with(trace, drop_reason::partition), 8U);
+    EXPECT_EQ(count_drops_with(trace, drop_reason::loss), 4U);
+    EXPECT_EQ(count_drops_with(trace, drop_reason::crashed), 0U);
 }
 
 }  // namespace
