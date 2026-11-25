@@ -424,6 +424,10 @@ void network::schedule(std::chrono::nanoseconds time, std::function<void()> acti
     events_.push(scheduled_event{time, next_seq_++, std::move(action)});
 }
 
+void network::schedule_silent(std::function<void()> action) {
+    schedule(now_, std::move(action));
+}
+
 void network::deliver(const message& msg) {
     // Partitioned at delivery time: a message that was in flight when the
     // partition started is lost.

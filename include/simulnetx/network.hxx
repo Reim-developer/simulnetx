@@ -243,6 +243,16 @@ private:
     timer_id schedule_node_timer(node_id owner, std::chrono::nanoseconds delay,
                                  std::function<void()> callback);
     void schedule(std::chrono::nanoseconds time, std::function<void()> action);
+
+    // Schedule an action at the CURRENT virtual time WITHOUT recording a
+    // timer_fired event and WITHOUT consuming a timer id. For internal
+    // use by the socket shim's completion deferral only: a completion
+    // invocation is not a user-scheduled timer, so it must neither
+    // appear in the trace nor consume ids from the user's timer-id
+    // namespace (a user keeping timer ids would see gaps otherwise).
+    // The action still runs through the (time, seq) event queue, so
+    // ordering and determinism are identical to a zero-delay timer.
+    void schedule_silent(std::function<void()> action);
     void deliver(const message& msg);
 
     bool partitioned_between(node_id a, node_id b) const;
