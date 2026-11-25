@@ -20,6 +20,10 @@ namespace simulnetx {
 
 class network;
 
+namespace udp {
+class socket;
+}  // namespace udp
+
 // One endpoint in a simulated network. Nodes are owned by network; references
 // returned by network::add_node stay valid for the lifetime of the network.
 class node {
@@ -169,6 +173,7 @@ public:
 
 private:
     friend class network;
+    friend class udp::socket;
 
     node(network* owner, node_id id, std::string name)
         : owner_(owner), id_(id), name_(std::move(name)) {}
@@ -210,6 +215,18 @@ private:
     // Send a request envelope: [request_envelope_tag][id][req_tag][payload].
     void send_request_envelope(std::uint64_t id, node_id to, std::uint64_t req_tag,
                                const std::vector<std::byte>& req_bytes);
+
+    // Send a UDP datagram (see udp.hxx): builds the shim envelope
+    // [datagram_envelope_tag][src_port][dst_port][payload] and sends it
+    // with the envelope tag, so the trace carries it. Same link/crash
+    // rules as the raw sends.
+    void send_datagram(node_id to, std::uint16_t src_port, std::uint16_t dst_port,
+                       std::vector<std::byte> payload);
+
+    // Route a datagram envelope to the socket bound to its destination
+    // port (via the network's registry). A datagram for an unbound port
+    // is silently dropped.
+    void dispatch_datagram(const message& msg);
 
     // Cancel all pending requests silently, for network::crash: the
     // pending map is cleared, and the retry/timeout timers (node timers)

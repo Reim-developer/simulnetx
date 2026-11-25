@@ -22,6 +22,10 @@
 
 namespace simulnetx {
 
+namespace udp {
+class socket;
+}  // namespace udp
+
 // An in-process simulated network with a virtual clock.
 //
 // Same seed + same scenario = identical results on every run, on every
@@ -170,6 +174,7 @@ public:
 
 private:
     friend class node;
+    friend class udp::socket;
 
     // One scheduled action: a message delivery or a timer callback. Ordered by
     // (time, sequence): the sequence number is a monotonically increasing
@@ -211,6 +216,24 @@ private:
 
     void send_from(node_id from, node_id to, std::vector<std::byte> payload,
                    std::uint64_t tag = 0);
+
+    // Port registry for the UDP socket shim (see udp.hxx). register_socket
+    // binds (node, port) to a socket; port 0 allocates the lowest free
+    // ephemeral port from 49152 up on that node. Returns the port actually
+    // bound. Throws std::logic_error if the port is already bound on the
+    // node, or if no ephemeral port is free. unregister_socket is a no-op
+    // for an unregistered pair.
+    std::uint16_t register_socket(node_id id, std::uint16_t port, udp::socket* sock);
+    void unregister_socket(node_id id, std::uint16_t port);
+    // Deliver a datagram to the socket bound to (to, dst_port), if any; a
+    // datagram for an unbound port is silently dropped (UDP-faithful: the
+    // trace's delivered event already recorded its arrival). Takes the
+    // sender as (from, src_port) rather than an endpoint so this header
+    // does not need udp.hxx's complete type (which would be an include
+    // cycle - udp.hxx includes this header).
+    void deliver_datagram(node_id to, std::uint16_t dst_port, node_id from,
+                          std::uint16_t src_port, std::vector<std::byte> payload);
+    std::uint16_t allocate_ephemeral_port(node_id id);
     // Schedule a timer owned by one node. The callback captures the node's
     // generation at schedule time and no-ops if the generation changed
     // (i.e. the node crashed in between), so node timers are cancelled by a
@@ -260,6 +283,12 @@ private:
 
     // Strict tag dispatch; see set_strict_tags. Default true.
     bool strict_tags_{true};
+
+    // UDP socket registry: (node, port) -> socket (non-owning; sockets
+    // unregister in close() / the destructor / a move). Plus the
+    // per-node next ephemeral port, starting at 49152.
+    std::map<std::pair<node_id, std::uint16_t>, udp::socket*> sockets_;
+    std::map<node_id, std::uint16_t> next_ephemeral_;
 };
 
 }  // namespace simulnetx

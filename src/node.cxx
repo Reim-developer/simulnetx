@@ -49,6 +49,10 @@ bool node::deliver(const message& msg) {
             dispatch_response(msg);
             return true;
         }
+        if (tag == detail::datagram_envelope_tag) {
+            dispatch_datagram(msg);
+            return true;
+        }
         const auto it = typed_handlers_.find(tag);
         if (it != typed_handlers_.end()) {
             it->second(msg);
@@ -106,6 +110,26 @@ void node::send_request_envelope(std::uint64_t id, node_id to, std::uint64_t req
     detail::append_u64(payload, req_tag);
     detail::append_bytes(payload, req_bytes.data(), req_bytes.size());
     send_with_tag(to, std::move(payload), req_tag);
+}
+
+void node::send_datagram(node_id to, std::uint16_t src_port, std::uint16_t dst_port,
+                         std::vector<std::byte> payload) {
+    std::vector<std::byte> envelope;
+    detail::append_u64(envelope, detail::datagram_envelope_tag);
+    detail::append_u64(envelope, src_port);
+    detail::append_u64(envelope, dst_port);
+    detail::append_bytes(envelope, payload.data(), payload.size());
+    send_with_tag(to, std::move(envelope), detail::datagram_envelope_tag);
+}
+
+void node::dispatch_datagram(const message& msg) {
+    detail::cursor in(msg.payload.data(), msg.payload.size());
+    (void)in.take_u64();  // datagram_envelope_tag, already matched by deliver
+    const std::uint16_t src_port = static_cast<std::uint16_t>(in.take_u64());
+    const std::uint16_t dst_port = static_cast<std::uint16_t>(in.take_u64());
+    const std::span<const std::byte> rest = in.take(in.remaining());
+    std::vector<std::byte> payload(rest.begin(), rest.end());
+    owner_->deliver_datagram(id_, dst_port, msg.from, src_port, std::move(payload));
 }
 
 void node::record_request_sent(std::uint64_t id, node_id to, unsigned attempt) {

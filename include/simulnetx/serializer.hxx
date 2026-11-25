@@ -80,6 +80,10 @@ std::uint64_t type_tag() {
 constexpr std::uint64_t request_envelope_tag = fnv1a_64("simulnetx::request");
 constexpr std::uint64_t response_envelope_tag = fnv1a_64("simulnetx::response");
 
+// A UDP datagram is [datagram_envelope_tag][src_port][dst_port][payload];
+// see udp.hxx. Ports travel as u64 fields for uniform cursor parsing.
+constexpr std::uint64_t datagram_envelope_tag = fnv1a_64("simulnetx::datagram");
+
 // Appending helpers for the encode side. All appends are to the caller's
 // vector; nothing here allocates on its own.
 inline void append_bytes(std::vector<std::byte>& out, const std::byte* data,

@@ -6,6 +6,7 @@
 
 #include "simulnetx/errors.hxx"
 #include "simulnetx/serializer.hxx"
+#include "simulnetx/udp.hxx"
 
 namespace simulnetx {
 
@@ -494,6 +495,51 @@ std::chrono::nanoseconds network::sample_delay(std::chrono::nanoseconds range) {
     const double fraction = rng_.next_double();
     const auto extra = static_cast<std::int64_t>(fraction * static_cast<double>(range.count()));
     return std::chrono::nanoseconds{extra};
+}
+
+std::uint16_t network::register_socket(node_id id, std::uint16_t port,
+                                       udp::socket* sock) {
+    std::uint16_t actual = port;
+    if (actual == 0) {
+        actual = allocate_ephemeral_port(id);
+    }
+    const auto key = std::make_pair(id, actual);
+    if (sockets_.contains(key)) {
+        throw std::logic_error("simulnetx: port " + std::to_string(actual) +
+                               " is already bound on node " + node_name(id));
+    }
+    sockets_.emplace(key, sock);
+    return actual;
+}
+
+void network::unregister_socket(node_id id, std::uint16_t port) {
+    sockets_.erase(std::make_pair(id, port));
+}
+
+void network::deliver_datagram(node_id to, std::uint16_t dst_port, node_id from,
+                               std::uint16_t src_port, std::vector<std::byte> payload) {
+    const auto it = sockets_.find(std::make_pair(to, dst_port));
+    if (it == sockets_.end()) {
+        return;  // No socket bound to this port: silent drop (see udp.hxx).
+    }
+    it->second->on_datagram(udp::endpoint{from, src_port}, std::move(payload));
+}
+
+std::uint16_t network::allocate_ephemeral_port(node_id id) {
+    std::uint16_t& next = next_ephemeral_[id];
+    if (next == 0) {
+        next = 49152;  // First allocation for this node; the counter never
+                       // returns to 0 afterwards (it wraps 65535 -> 49152).
+    }
+    for (int i = 0; i < 16384; ++i) {
+        const std::uint16_t candidate = next;
+        next = static_cast<std::uint16_t>(next == 65535 ? 49152 : next + 1);
+        if (!sockets_.contains(std::make_pair(id, candidate))) {
+            return candidate;
+        }
+    }
+    throw std::logic_error("simulnetx: no ephemeral ports left on node " +
+                           node_name(id));
 }
 
 }  // namespace simulnetx

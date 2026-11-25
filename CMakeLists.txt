@@ -10,6 +10,7 @@ add_library(simulnetx
     src/node.cxx
     src/rng.cxx
     src/scenario.cxx
+    src/udp.cxx
 )
 target_include_directories(simulnetx PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -50,6 +51,7 @@ if(SIMULNETX_BUILD_TESTS)
         tests/rng_test.cxx
         tests/scenario_test.cxx
         tests/serializer_test.cxx
+        tests/socket_test.cxx
         tests/topology_test.cxx
         tests/trace_dump_test.cxx
         tests/trace_test.cxx
