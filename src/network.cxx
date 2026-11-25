@@ -107,6 +107,15 @@ void network::crash(node_id id) {
     // must not fire, and its retry/timeout timers are already cancelled
     // by the generation bump above.
     nodes_[id]->cancel_pending_requests();
+    // Sockets on the crashed node lose their in-flight state: pending
+    // receives are cancelled and queued datagrams dropped. Bindings
+    // survive (see udp.hxx). The notification schedules zero-delay
+    // network events, so it never mutates the registry mid-iteration.
+    for (const auto& [key, sock] : sockets_) {
+        if (key.first == id) {
+            sock->on_node_crashed();
+        }
+    }
     record(trace_event{.kind = event_kind::node_crashed, .node = id});
 }
 

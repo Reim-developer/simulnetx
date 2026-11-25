@@ -45,8 +45,8 @@ std::string to_string(const endpoint& ep);
 // violations); async completions report via std::error_code. Send-path
 // errors (no link, unknown node, crashed sender) throw synchronously
 // out of async_send_to / async_send - exactly like node::send - and the
-// handler never fires. (Cancellation arrives with the next commit;
-// it reports std::errc::operation_canceled.)
+// handler never fires. Cancellation reports
+// std::errc::operation_canceled.
 //
 // Non-copyable, movable (a move transfers the binding, the queued
 // datagrams and the pending receive, and updates the registry entry).
@@ -73,7 +73,8 @@ public:
     endpoint local_endpoint() const;
 
     // False after close(). close() is idempotent: it unregisters the
-    // port and discards queued datagrams.
+    // port, cancels the pending receive (if any) with operation
+    // canceled, and discards queued datagrams.
     bool is_open() const { return open_; }
     void close();
 
@@ -120,6 +121,12 @@ public:
     void async_receive_from(std::span<std::byte> buffer, receive_handler handler);
     void async_receive(std::span<std::byte> buffer, connected_receive_handler handler);
 
+    // Cancel the pending receive, if any: its handler fires (via a
+    // zero-delay event) with std::errc::operation_canceled and 0
+    // bytes. A no-op with no pending receive. Sends cannot be
+    // cancelled - once accepted, a datagram is a scheduled sim event.
+    void cancel();
+
 private:
     // Qualified: an unqualified `friend class network;` here would
     // declare a NEW class simulnetx::udp::network (friend lookup for an
@@ -136,6 +143,12 @@ private:
     // run_until) or queues the datagram.
     void on_datagram(endpoint sender, std::vector<std::byte> payload);
 
+    // Called by network when this socket's node crashes: the pending
+    // receive is cancelled and queued datagrams are discarded. The
+    // binding survives - identity is preserved, in-flight state is
+    // cancelled (mirrors the handler-preserved crash rule).
+    void on_node_crashed();
+
     // Move-transfer helper, shared by the move constructor and move
     // assignment: takes other's state, repoints the registry entry,
     // and leaves other closed with no pending receive.
@@ -143,6 +156,10 @@ private:
 
     // Bind an ephemeral port if not already bound.
     void ensure_bound();
+
+    // Cancel the pending receive, if any, reporting operation canceled
+    // via a zero-delay event.
+    void cancel_pending_receive();
 
     // Schedule a completion as a zero-delay sim event, so it fires
     // during run_until and never synchronously from the caller's call.

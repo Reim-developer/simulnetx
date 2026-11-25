@@ -626,4 +626,133 @@ TEST(SocketTest, MoveTransfersQueuedDatagram) {
     EXPECT_EQ(got, "moved");
 }
 
+// --- cancel + crash semantics (commit 3) ---
+
+TEST(SocketTest, CancelPendingReceiveReportsCanceled) {
+    simulnetx::network net(42);
+    auto& a = net.add_node("a");
+    socket s(net, a);
+    s.bind(8000);
+    std::array<std::byte, 64> buf{};
+    std::error_code got;
+    bool fired = false;
+    s.async_receive_from(buf, [&](std::error_code ec, std::size_t n, endpoint) {
+        got = ec;
+        EXPECT_EQ(n, 0u);
+        fired = true;
+    });
+    s.cancel();
+    EXPECT_FALSE(fired);  // never synchronously
+    net.run_until(1s);
+    EXPECT_TRUE(fired);
+    EXPECT_EQ(got, std::errc::operation_canceled);
+}
+
+TEST(SocketTest, CancelWithNoPendingReceiveIsNoop) {
+    simulnetx::network net(42);
+    auto& a = net.add_node("a");
+    socket s(net, a);
+    s.bind(8000);
+    EXPECT_NO_THROW(s.cancel());
+    net.run_until(1s);  // nothing scheduled, nothing fires
+}
+
+TEST(SocketTest, CloseCancelsPendingReceive) {
+    simulnetx::network net(42);
+    auto& a = net.add_node("a");
+    socket s(net, a);
+    s.bind(8000);
+    std::array<std::byte, 64> buf{};
+    std::error_code got;
+    bool fired = false;
+    s.async_receive_from(buf, [&](std::error_code ec, std::size_t, endpoint) {
+        got = ec;
+        fired = true;
+    });
+    s.close();
+    EXPECT_FALSE(fired);
+    net.run_until(1s);
+    EXPECT_TRUE(fired);
+    EXPECT_EQ(got, std::errc::operation_canceled);
+}
+
+TEST(SocketTest, CrashCancelsPendingReceive) {
+    simulnetx::network net(42);
+    auto& a = net.add_node("a");
+    auto& b = net.add_node("b");
+    net.link(a.id(), b.id(), {.latency = 10ms});
+    socket recv_sock(net, b);
+    recv_sock.bind(8000);
+    std::array<std::byte, 64> buf{};
+    bool fired = false;
+    std::error_code got;
+    recv_sock.async_receive_from(buf, [&](std::error_code ec, std::size_t, endpoint) {
+        fired = true;
+        got = ec;
+    });
+    net.crash(b.id());
+    EXPECT_FALSE(fired);  // never synchronously
+    net.run_until(1s);
+    EXPECT_TRUE(fired);
+    EXPECT_EQ(got, std::errc::operation_canceled);
+}
+
+TEST(SocketTest, CrashDropsQueueButBindingSurvives) {
+    simulnetx::network net(42);
+    auto& a = net.add_node("a");
+    auto& b = net.add_node("b");
+    net.link(a.id(), b.id(), {.latency = 10ms});
+    socket recv_sock(net, b);
+    recv_sock.bind(8000);
+    socket send_sock(net, a);
+    send_sock.async_send_to(as_bytes("gone"), {b.id(), 8000}, [](auto, auto) {});
+    net.run_until(100ms);  // "gone" queued (no pending receive)
+    net.crash(b.id());
+    net.restart(b.id());
+    EXPECT_TRUE(recv_sock.is_open());
+    EXPECT_EQ(recv_sock.local_endpoint().port, 8000);
+    // The queued datagram was dropped: arm a receive, nothing comes.
+    std::array<std::byte, 64> buf{};
+    bool fired = false;
+    recv_sock.async_receive_from(buf, [&](std::error_code ec, std::size_t, endpoint) {
+        EXPECT_FALSE(ec);
+        fired = true;
+    });
+    net.run_until(500ms);
+    EXPECT_FALSE(fired);
+    // And a post-restart datagram IS received on the same binding.
+    send_sock.async_send_to(as_bytes("back"), {b.id(), 8000}, [](auto, auto) {});
+    net.run_until(1s);
+    EXPECT_TRUE(fired);
+}
+
+TEST(SocketTest, CrashSendRules) {
+    simulnetx::network net(42);
+    auto& a = net.add_node("a");
+    auto& b = net.add_node("b");
+    net.link(a.id(), b.id(), {.latency = 10ms});
+    socket recv_sock(net, b);
+    recv_sock.bind(8000);
+    socket send_sock(net, a);
+    // A crashed node cannot send: throws synchronously, handler never fires.
+    net.crash(a.id());
+    bool fired = false;
+    EXPECT_THROW(send_sock.async_send_to(as_bytes("x"), {b.id(), 8000},
+                                         [&](auto, auto) { fired = true; }),
+                 std::logic_error);
+    net.run_until(1s);
+    EXPECT_FALSE(fired);
+    // A message TO a crashed node is dropped (crashed), at send time.
+    net.restart(a.id());
+    net.crash(b.id());
+    send_sock.async_send_to(as_bytes("x"), {b.id(), 8000}, [](auto, auto) {});
+    net.run_until(2s);
+    net.dropped_count().equal(1);
+    // crashed(a), restarted(a), crashed(b), sent, dropped(crashed).
+    ASSERT_EQ(net.trace().size(), 5u);
+    EXPECT_EQ(net.trace()[3].kind, event_kind::sent);
+    EXPECT_EQ(net.trace()[4].kind, event_kind::dropped);
+    EXPECT_EQ(net.trace()[4].reason, simulnetx::drop_reason::crashed);
+}
+
 }  // namespace

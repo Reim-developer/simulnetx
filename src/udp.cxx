@@ -77,9 +77,7 @@ void socket::close() {
         bound_ = false;
     }
     queue_.clear();
-    // NOTE: a pending receive is not cancelled here yet - cancel()
-    // arrives with the next commit. Until then, closing a socket with
-    // a pending receive simply drops the completion.
+    cancel_pending_receive();
 }
 
 void socket::connect(endpoint peer) {
@@ -152,6 +150,8 @@ void socket::async_receive(std::span<std::byte> buffer,
                        });
 }
 
+void socket::cancel() { cancel_pending_receive(); }
+
 void socket::on_datagram(endpoint sender, std::vector<std::byte> payload) {
     if (!recv_pending_) {
         queue_.emplace_back(sender, std::move(payload));
@@ -169,12 +169,28 @@ void socket::on_datagram(endpoint sender, std::vector<std::byte> payload) {
     completion(std::error_code{}, n, sender);
 }
 
+void socket::on_node_crashed() {
+    queue_.clear();
+    cancel_pending_receive();
+}
+
 void socket::ensure_bound() {
     if (bound_) {
         return;
     }
     port_ = net_->register_socket(node_->id(), 0, this);
     bound_ = true;
+}
+
+void socket::cancel_pending_receive() {
+    if (!recv_pending_) {
+        return;
+    }
+    recv_pending_ = false;
+    completion_fn completion = std::move(recv_completion_);
+    recv_completion_ = nullptr;
+    fire_later(std::move(completion),
+               std::make_error_code(std::errc::operation_canceled), 0, endpoint{});
 }
 
 void socket::fire_later(completion_fn completion, std::error_code ec, std::size_t n,
