@@ -8,7 +8,9 @@
 #include <memory>
 #include <ostream>
 #include <queue>
+#include <set>
 #include <string>
+#include <tuple>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -25,6 +27,15 @@ namespace simulnetx {
 namespace udp {
 class socket;
 }  // namespace udp
+
+namespace tcp {
+class socket;
+class acceptor;
+
+namespace detail {
+struct tcp_connection;
+}  // namespace detail
+}  // namespace tcp
 
 // An in-process simulated network with a virtual clock.
 //
@@ -175,6 +186,9 @@ public:
 private:
     friend class node;
     friend class udp::socket;
+    friend struct tcp::detail::tcp_connection;
+    friend class tcp::socket;
+    friend class tcp::acceptor;
 
     // One scheduled action: a message delivery or a timer callback. Ordered by
     // (time, sequence): the sequence number is a monotonically increasing
@@ -234,6 +248,45 @@ private:
     void deliver_datagram(node_id to, std::uint16_t dst_port, node_id from,
                           std::uint16_t src_port, std::vector<std::byte> payload);
     std::uint16_t allocate_ephemeral_port(node_id id);
+
+    // Port registry for the TCP stream shim (see tcp.hxx). TCP and UDP
+    // ports are independent namespaces, so TCP has its own claim set,
+    // listener map and connection map, and its own ephemeral counter.
+    // claim_tcp_port binds (node, port) to a socket or acceptor; port 0
+    // allocates the lowest free ephemeral port from 49152 up on that
+    // node. Returns the port actually bound. Throws std::logic_error if
+    // the port is already claimed on the node, or if no ephemeral port
+    // is free. release_tcp_port is a no-op for an unclaimed pair.
+    std::uint16_t claim_tcp_port(node_id id, std::uint16_t port);
+    void release_tcp_port(node_id id, std::uint16_t port);
+    std::uint16_t allocate_tcp_ephemeral_port(node_id id);
+    // Listeners: (node, port) -> acceptor, for SYN routing. Registered
+    // by acceptor::listen, unregistered by close / move / destruction.
+    void register_tcp_listener(node_id id, std::uint16_t port, tcp::acceptor* acc);
+    void unregister_tcp_listener(node_id id, std::uint16_t port);
+    // Connections: (dst node, dst port, src node, src port) -> the
+    // connection state, for segment routing. A connection registers
+    // when its handshake starts and unregisters when it fully closes,
+    // crashes or resets. register_tcp_connection throws
+    // std::logic_error if the 4-tuple is already registered (a
+    // reconnect to the same peer from the same port while the old
+    // connection still lives - there is no TIME_WAIT, so the old
+    // connection must fully close first).
+    using tcp_key = std::tuple<node_id, std::uint16_t, node_id, std::uint16_t>;
+    void register_tcp_connection(const tcp_key& key,
+                                 std::shared_ptr<tcp::detail::tcp_connection> conn);
+    void unregister_tcp_connection(const tcp_key& key);
+    // Route a segment to the connection for its 4-tuple, or to the
+    // listener on its destination port when it is a bare SYN. Any other
+    // segment for a nonexistent connection gets an RST back, so the
+    // sender learns the connection is dead (the crash/restart rule in
+    // tcp.hxx). An RST for a nonexistent connection is dropped
+    // silently. The RST send is best-effort: a missing return link is
+    // swallowed (the sender's RTO reports timed_out instead).
+    void deliver_segment(node_id to, std::uint16_t dst_port, node_id from,
+                         std::uint16_t src_port, std::uint32_t flags,
+                         std::uint64_t seq, std::uint64_t ack,
+                         std::vector<std::byte> payload);
     // Schedule a timer owned by one node. The callback captures the node's
     // generation at schedule time and no-ops if the generation changed
     // (i.e. the node crashed in between), so node timers are cancelled by a
@@ -253,6 +306,14 @@ private:
     // The action still runs through the (time, seq) event queue, so
     // ordering and determinism are identical to a zero-delay timer.
     void schedule_silent(std::function<void()> action);
+
+    // The delayed twin of schedule_silent: schedule an action at an
+    // absolute virtual time, still without a timer_fired event and
+    // without consuming a timer id. For internal use by the TCP shim's
+    // retransmission timers only: an RTO is machinery, not a
+    // user-scheduled timer. Throws std::invalid_argument if t is before
+    // the current virtual time.
+    void schedule_silent_at(std::chrono::nanoseconds t, std::function<void()> action);
     void deliver(const message& msg);
 
     bool partitioned_between(node_id a, node_id b) const;
@@ -299,6 +360,17 @@ private:
     // per-node next ephemeral port, starting at 49152.
     std::map<std::pair<node_id, std::uint16_t>, udp::socket*> sockets_;
     std::map<node_id, std::uint16_t> next_ephemeral_;
+
+    // TCP registries (see the method comments above). Listeners and
+    // connections are non-owning raw pointers / shared state: the
+    // registry never keeps a socket alive, and the connection state is
+    // kept alive by its socket wrapper (and by in-flight RTO events,
+    // which hold only a weak_ptr). tcp_bound_ports_ is the claim set
+    // for bind(): a port claimed by a socket or an acceptor.
+    std::map<std::pair<node_id, std::uint16_t>, tcp::acceptor*> tcp_listeners_;
+    std::map<tcp_key, std::shared_ptr<tcp::detail::tcp_connection>> tcp_connections_;
+    std::set<std::pair<node_id, std::uint16_t>> tcp_bound_ports_;
+    std::map<node_id, std::uint16_t> next_tcp_ephemeral_;
 };
 
 }  // namespace simulnetx

@@ -6,6 +6,7 @@
 
 #include "simulnetx/errors.hxx"
 #include "simulnetx/serializer.hxx"
+#include "simulnetx/tcp.hxx"
 #include "simulnetx/udp.hxx"
 
 namespace simulnetx {
@@ -115,6 +116,31 @@ void network::crash(node_id id) {
         if (key.first == id) {
             sock->on_node_crashed();
         }
+    }
+    // TCP connections on the crashed node lose their connection state:
+    // pending ops are cancelled, reassembly buffers dropped. Bindings
+    // survive (see tcp.hxx). Snapshot the states first: on_node_crashed
+    // unregisters the connection, which would mutate the map.
+    std::vector<std::shared_ptr<tcp::detail::tcp_connection>> doomed;
+    for (const auto& [key, conn] : tcp_connections_) {
+        if (std::get<0>(key) == id) {
+            doomed.push_back(conn);
+        }
+    }
+    for (const auto& conn : doomed) {
+        conn->on_node_crashed();
+    }
+    // TCP listeners on the crashed node drop their queued connections;
+    // the listener binding survives, so the acceptor works again after
+    // the restart.
+    std::vector<tcp::acceptor*> dead_listeners;
+    for (const auto& [key, acc] : tcp_listeners_) {
+        if (key.first == id) {
+            dead_listeners.push_back(acc);
+        }
+    }
+    for (tcp::acceptor* acc : dead_listeners) {
+        acc->on_node_crashed();
     }
     record(trace_event{.kind = event_kind::node_crashed, .node = id});
 }
@@ -437,6 +463,15 @@ void network::schedule_silent(std::function<void()> action) {
     schedule(now_, std::move(action));
 }
 
+void network::schedule_silent_at(std::chrono::nanoseconds t,
+                                 std::function<void()> action) {
+    if (t < now_) {
+        throw std::invalid_argument(
+            "simulnetx: schedule_silent_at time is before the current virtual time");
+    }
+    schedule(t, std::move(action));
+}
+
 void network::deliver(const message& msg) {
     // Partitioned at delivery time: a message that was in flight when the
     // partition started is lost.
@@ -553,6 +588,96 @@ std::uint16_t network::allocate_ephemeral_port(node_id id) {
     }
     throw std::logic_error("simulnetx: no ephemeral ports left on node " +
                            node_name(id));
+}
+
+std::uint16_t network::claim_tcp_port(node_id id, std::uint16_t port) {
+    std::uint16_t actual = port;
+    if (actual == 0) {
+        actual = allocate_tcp_ephemeral_port(id);
+    }
+    const auto key = std::make_pair(id, actual);
+    if (tcp_bound_ports_.contains(key)) {
+        throw std::logic_error("simulnetx: TCP port " + std::to_string(actual) +
+                               " is already bound on node " + node_name(id));
+    }
+    tcp_bound_ports_.insert(key);
+    return actual;
+}
+
+void network::release_tcp_port(node_id id, std::uint16_t port) {
+    tcp_bound_ports_.erase(std::make_pair(id, port));
+}
+
+std::uint16_t network::allocate_tcp_ephemeral_port(node_id id) {
+    std::uint16_t& next = next_tcp_ephemeral_[id];
+    if (next == 0) {
+        next = 49152;  // First allocation for this node; the counter never
+                       // returns to 0 afterwards (it wraps 65535 -> 49152).
+    }
+    for (int i = 0; i < 16384; ++i) {
+        const std::uint16_t candidate = next;
+        next = static_cast<std::uint16_t>(next == 65535 ? 49152 : next + 1);
+        if (!tcp_bound_ports_.contains(std::make_pair(id, candidate))) {
+            return candidate;
+        }
+    }
+    throw std::logic_error("simulnetx: no TCP ephemeral ports left on node " +
+                           node_name(id));
+}
+
+void network::register_tcp_listener(node_id id, std::uint16_t port,
+                                    tcp::acceptor* acc) {
+    tcp_listeners_.emplace(std::make_pair(id, port), acc);
+}
+
+void network::unregister_tcp_listener(node_id id, std::uint16_t port) {
+    tcp_listeners_.erase(std::make_pair(id, port));
+}
+
+void network::register_tcp_connection(
+    const tcp_key& key, std::shared_ptr<tcp::detail::tcp_connection> conn) {
+    if (tcp_connections_.contains(key)) {
+        throw std::logic_error(
+            "simulnetx: a TCP connection for this address pair already exists");
+    }
+    tcp_connections_.emplace(key, std::move(conn));
+}
+
+void network::unregister_tcp_connection(const tcp_key& key) {
+    tcp_connections_.erase(key);
+}
+
+void network::deliver_segment(node_id to, std::uint16_t dst_port, node_id from,
+                              std::uint16_t src_port, std::uint32_t flags,
+                              std::uint64_t seq, std::uint64_t ack,
+                              std::vector<std::byte> payload) {
+    const tcp_key key{to, dst_port, from, src_port};
+    if (const auto it = tcp_connections_.find(key); it != tcp_connections_.end()) {
+        it->second->on_segment(from, src_port, flags, seq, ack, std::move(payload));
+        return;
+    }
+    const bool is_rst = (flags & tcp::detail::tcp_flag_rst) != 0;
+    if (is_rst) {
+        return;  // RST for a nonexistent connection: drop silently.
+    }
+    const bool is_syn = (flags & tcp::detail::tcp_flag_syn) != 0;
+    const bool is_ack = (flags & tcp::detail::tcp_flag_ack) != 0;
+    if (is_syn && !is_ack) {
+        if (const auto lit = tcp_listeners_.find(std::make_pair(to, dst_port));
+            lit != tcp_listeners_.end()) {
+            lit->second->on_syn(from, src_port, seq);
+            return;
+        }
+        // No listener on this port: the connection is refused.
+    }
+    // Any other segment for a nonexistent connection: the peer is gone,
+    // so answer RST (best-effort: a missing return link is swallowed;
+    // the sender's RTO reports timed_out instead).
+    try {
+        nodes_[to]->send_segment(from, dst_port, src_port, tcp::detail::tcp_flag_rst, 0, 0,
+                                 {});
+    } catch (...) {
+    }
 }
 
 }  // namespace simulnetx

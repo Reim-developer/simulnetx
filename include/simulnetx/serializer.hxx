@@ -84,6 +84,14 @@ constexpr std::uint64_t response_envelope_tag = fnv1a_64("simulnetx::response");
 // see udp.hxx. Ports travel as u64 fields for uniform cursor parsing.
 constexpr std::uint64_t datagram_envelope_tag = fnv1a_64("simulnetx::datagram");
 
+// A TCP segment is [tcp_envelope_tag][src_port][dst_port][flags][seq]
+// [ack][payload]; see tcp.hxx. Ports travel as u64 fields, like the
+// datagram envelope: without them node::deliver could not route a
+// segment to the right socket or acceptor on a node with several bound
+// ports. Flags is a u32 bitmask (see tcp_flag_* in tcp.hxx). The
+// envelope is 44 bytes + payload.
+constexpr std::uint64_t tcp_envelope_tag = fnv1a_64("simulnetx::tcp");
+
 // Appending helpers for the encode side. All appends are to the caller's
 // vector; nothing here allocates on its own.
 inline void append_bytes(std::vector<std::byte>& out, const std::byte* data,

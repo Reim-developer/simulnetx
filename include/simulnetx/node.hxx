@@ -24,6 +24,15 @@ namespace udp {
 class socket;
 }  // namespace udp
 
+namespace tcp {
+class socket;
+class acceptor;
+
+namespace detail {
+struct tcp_connection;
+}  // namespace detail
+}  // namespace tcp
+
 // One endpoint in a simulated network. Nodes are owned by network; references
 // returned by network::add_node stay valid for the lifetime of the network.
 class node {
@@ -174,6 +183,9 @@ public:
 private:
     friend class network;
     friend class udp::socket;
+    friend struct tcp::detail::tcp_connection;
+    friend class tcp::socket;
+    friend class tcp::acceptor;
 
     node(network* owner, node_id id, std::string name)
         : owner_(owner), id_(id), name_(std::move(name)) {}
@@ -222,6 +234,20 @@ private:
     // rules as the raw sends.
     void send_datagram(node_id to, std::uint16_t src_port, std::uint16_t dst_port,
                        std::vector<std::byte> payload);
+
+    // Send a TCP segment (see tcp.hxx): builds the shim envelope
+    // [tcp_envelope_tag][src_port][dst_port][flags][seq][ack][payload]
+    // and sends it with the envelope tag, so the trace carries it. Same
+    // link/crash rules as the raw sends.
+    void send_segment(node_id to, std::uint16_t src_port, std::uint16_t dst_port,
+                      std::uint32_t flags, std::uint64_t seq, std::uint64_t ack,
+                      std::vector<std::byte> payload);
+
+    // Route a TCP segment to the connection or acceptor for its
+    // destination port (via the network's TCP registry). A segment for
+    // a port with no connection and no listener gets an RST back, so
+    // the sender learns the connection is dead.
+    void dispatch_segment(const message& msg);
 
     // Route a datagram envelope to the socket bound to its destination
     // port (via the network's registry). A datagram for an unbound port

@@ -53,6 +53,10 @@ bool node::deliver(const message& msg) {
             dispatch_datagram(msg);
             return true;
         }
+        if (tag == detail::tcp_envelope_tag) {
+            dispatch_segment(msg);
+            return true;
+        }
         const auto it = typed_handlers_.find(tag);
         if (it != typed_handlers_.end()) {
             it->second(msg);
@@ -120,6 +124,34 @@ void node::send_datagram(node_id to, std::uint16_t src_port, std::uint16_t dst_p
     detail::append_u64(envelope, dst_port);
     detail::append_bytes(envelope, payload.data(), payload.size());
     send_with_tag(to, std::move(envelope), detail::datagram_envelope_tag);
+}
+
+void node::send_segment(node_id to, std::uint16_t src_port, std::uint16_t dst_port,
+                        std::uint32_t flags, std::uint64_t seq, std::uint64_t ack,
+                        std::vector<std::byte> payload) {
+    std::vector<std::byte> envelope;
+    detail::append_u64(envelope, detail::tcp_envelope_tag);
+    detail::append_u64(envelope, src_port);
+    detail::append_u64(envelope, dst_port);
+    detail::append_trivial(envelope, flags);
+    detail::append_u64(envelope, seq);
+    detail::append_u64(envelope, ack);
+    detail::append_bytes(envelope, payload.data(), payload.size());
+    send_with_tag(to, std::move(envelope), detail::tcp_envelope_tag);
+}
+
+void node::dispatch_segment(const message& msg) {
+    detail::cursor in(msg.payload.data(), msg.payload.size());
+    (void)in.take_u64();  // tcp_envelope_tag, already matched by deliver
+    const std::uint16_t src_port = static_cast<std::uint16_t>(in.take_u64());
+    const std::uint16_t dst_port = static_cast<std::uint16_t>(in.take_u64());
+    const std::uint32_t flags = in.take_trivial<std::uint32_t>();
+    const std::uint64_t seq = in.take_u64();
+    const std::uint64_t ack = in.take_u64();
+    const std::span<const std::byte> rest = in.take(in.remaining());
+    std::vector<std::byte> payload(rest.begin(), rest.end());
+    owner_->deliver_segment(id_, dst_port, msg.from, src_port, flags, seq, ack,
+                            std::move(payload));
 }
 
 void node::dispatch_datagram(const message& msg) {
