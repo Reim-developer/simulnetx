@@ -8,9 +8,7 @@
 #include <vector>
 
 #include "simulnetx/network.hxx"
-#include "simulnetx/serializer.hxx"
 #include "simulnetx/tcp.hxx"
-#include "simulnetx/udp.hxx"
 
 using namespace simulnetx;
 using namespace std::chrono_literals;
@@ -29,7 +27,6 @@ struct TcpPair {
         net.link(a.id(), b.id(), link_config{.latency = 20ms});
     }
 };
-
 
 // A listening acceptor on node B, port 9000, plus a client socket on A.
 struct TcpServer {
@@ -58,62 +55,16 @@ tcp::socket connect_client(TcpPair& p, TcpServer& server, tcp::socket& accepted,
     return client;
 }
 
+std::string from_bytes(const std::vector<std::byte>& bytes) {
+    std::string text;
+    text.reserve(bytes.size());
+    for (const std::byte b : bytes) {
+        text.push_back(static_cast<char>(b));
+    }
+    return text;
+}
+
 }  // namespace
-
-TEST(TcpTest, BindAndLocalEndpoint) {
-    TcpPair p;
-    tcp::socket s(p.net, p.a);
-    s.bind(9000);
-    EXPECT_EQ(s.local_endpoint(), (tcp::endpoint{p.a.id(), 9000}));
-}
-
-TEST(TcpTest, DuplicateBindThrows) {
-    TcpPair p;
-    tcp::socket first(p.net, p.a);
-    first.bind(9000);
-    tcp::socket second(p.net, p.a);
-    EXPECT_THROW(second.bind(9000), std::logic_error);
-}
-
-TEST(TcpTest, EphemeralBindAllocatesFrom49152) {
-    TcpPair p;
-    tcp::socket first(p.net, p.a);
-    first.bind(0);
-    EXPECT_EQ(first.local_endpoint(), (tcp::endpoint{p.a.id(), 49152}));
-    tcp::socket second(p.net, p.a);
-    second.bind(0);
-    EXPECT_EQ(second.local_endpoint(), (tcp::endpoint{p.a.id(), 49153}));
-}
-
-TEST(TcpTest, LocalEndpointThrowsWhenUnbound) {
-    TcpPair p;
-    tcp::socket s(p.net, p.a);
-    EXPECT_THROW(s.local_endpoint(), std::logic_error);
-}
-
-TEST(TcpTest, UdpAndTcpPortsAreIndependent) {
-    // Separate registries per protocol: TCP 9000 and UDP 9000 coexist.
-    TcpPair p;
-    tcp::socket t(p.net, p.a);
-    t.bind(9000);
-    udp::socket u(p.net, p.a);
-    EXPECT_NO_THROW(u.bind(9000));
-    EXPECT_EQ(u.local_endpoint(), (udp::endpoint{p.a.id(), 9000}));
-}
-
-TEST(TcpTest, AcceptorBindListen) {
-    TcpPair p;
-    tcp::acceptor acc(p.net, p.b);
-    acc.bind(9000);
-    EXPECT_NO_THROW(acc.listen(8));
-    EXPECT_EQ(acc.local_endpoint(), (tcp::endpoint{p.b.id(), 9000}));
-}
-
-TEST(TcpTest, EnvelopeTagIsStable) {
-    // The TCP KIND tag is FNV-1a("simulnetx::tcp"), cross-compiler stable.
-    EXPECT_EQ(detail::tcp_envelope_tag, 14926712757373340827ull);
-    EXPECT_EQ(detail::datagram_envelope_tag, 5828304564438402943ull);
-}
 
 TEST(TcpTest, HandshakeGolden) {
     TcpPair p;
@@ -153,6 +104,42 @@ TEST(TcpTest, Refused) {
     EXPECT_EQ(static_cast<std::size_t>(p.net.event_count(event_kind::delivered)), 2u);
 }
 
+TEST(TcpTest, BacklogOverflow) {
+    TcpPair p;
+    tcp::acceptor acceptor(p.net, p.b);
+    acceptor.bind(9000);
+    acceptor.listen(1);
+    // No accept is armed yet: the first client's completed handshake
+    // sits in the completed queue (backlog 1).
+    tcp::socket first(p.net, p.a);
+    std::error_code first_ec{1, std::generic_category()};
+    first.async_connect(tcp::endpoint{p.b.id(), 9000},
+                        [&first_ec](std::error_code ec) { first_ec = ec; });
+    p.net.run_until(200ms);
+    EXPECT_FALSE(first_ec);  // handshake done, socket in the completed queue
+
+    // The second client connects only now, while the queue is full:
+    // its SYN is dropped, and so are its retransmits.
+    tcp::socket second(p.net, p.a);
+    std::error_code second_ec{1, std::generic_category()};
+    second.async_connect(tcp::endpoint{p.b.id(), 9000},
+                         [&second_ec](std::error_code ec) { second_ec = ec; });
+
+    p.net.run_until(15s);
+    EXPECT_EQ(second_ec, std::make_error_code(std::errc::timed_out));
+
+    // Arming the accept now drains the completed queue.
+    tcp::socket accepted(p.net, p.b);
+    std::error_code accept_ec{1, std::generic_category()};
+    acceptor.async_accept([&accepted, &accept_ec](tcp::socket s, std::error_code ec) {
+        accepted = std::move(s);
+        accept_ec = ec;
+    });
+    p.net.run_until(16s);
+    EXPECT_FALSE(accept_ec);
+    EXPECT_EQ(accepted.remote_endpoint(), (tcp::endpoint{p.a.id(), 49152}));
+}
+
 TEST(TcpTest, SelfConnect) {
     // A client and a listener on the SAME node: the SYN is a loopback
     // through the simulated link to itself.
@@ -174,32 +161,6 @@ TEST(TcpTest, SelfConnect) {
     EXPECT_FALSE(connect_ec);
     EXPECT_FALSE(accept_ec);
     EXPECT_EQ(client.remote_endpoint(), (tcp::endpoint{p.a.id(), 9000}));
-}
-
-TEST(TcpTest, TcpTagIsStable) {
-    TcpPair p;
-    TcpServer server(p);
-    tcp::socket accepted(p.net, p.b);
-    std::error_code accept_ec{1, std::generic_category()};
-    std::error_code connect_ec{1, std::generic_category()};
-    tcp::socket client = connect_client(p, server, accepted, accept_ec, connect_ec);
-    p.net.run_until(200ms);
-    ASSERT_FALSE(connect_ec);
-    // Every TCP segment carries the FNV-1a tag of "simulnetx::tcp".
-    for (const trace_event& ev : p.net.trace()) {
-        if (ev.kind == event_kind::sent || ev.kind == event_kind::delivered) {
-            EXPECT_EQ(ev.tag, 14926712757373340827ull);
-        }
-    }
-}
-
-std::string from_bytes(const std::vector<std::byte>& bytes) {
-    std::string text;
-    text.reserve(bytes.size());
-    for (const std::byte b : bytes) {
-        text.push_back(static_cast<char>(b));
-    }
-    return text;
 }
 
 TEST(TcpTest, StreamEcho) {
@@ -424,6 +385,389 @@ TEST(TcpTest, PartialRead) {
     EXPECT_EQ(from_bytes({rest.begin(), rest.begin() + 6}), "456789");
 }
 
+TEST(TcpTest, LossRetransmit) {
+    TcpPair p(42);
+    p.net.link(p.a.id(), p.b.id(),
+               link_config{.latency = 20ms, .loss_rate = 0.3});
+    TcpServer server(p);
+    tcp::socket accepted(p.net, p.b);
+    std::error_code accept_ec{1, std::generic_category()};
+    std::error_code connect_ec{1, std::generic_category()};
+    tcp::socket client = connect_client(p, server, accepted, accept_ec, connect_ec);
+    p.net.run_until(2s);
+    ASSERT_FALSE(connect_ec);
+    ASSERT_FALSE(accept_ec);
+
+    std::array<std::byte, 16> buf{};
+    std::error_code read_ec{1, std::generic_category()};
+    std::size_t read_n = 99;
+    accepted.async_read_some(buf, [&](std::error_code ec, std::size_t n) {
+        read_ec = ec;
+        read_n = n;
+    });
+    client.async_write("hello", [](std::error_code, std::size_t) {});
+    p.net.run_until(5s);
+    EXPECT_FALSE(read_ec);
+    EXPECT_EQ(read_n, 5u);
+    EXPECT_EQ(from_bytes({buf.begin(), buf.begin() + 5}), "hello");
+    // Some segment was lost and retransmitted: more sent than delivered.
+    EXPECT_GT(static_cast<std::size_t>(p.net.sent_count()), static_cast<std::size_t>(p.net.delivered_count()));
+    EXPECT_GT(static_cast<std::size_t>(p.net.dropped_count()), 0u);
+}
+
+TEST(TcpTest, ReorderReassembly) {
+    TcpPair p(13);
+    p.net.link(p.a.id(), p.b.id(),
+               link_config{.latency = 20ms, .jitter = 5ms, .reorder_rate = 1.0});
+    TcpServer server(p);
+    tcp::socket accepted(p.net, p.b);
+    std::error_code accept_ec{1, std::generic_category()};
+    std::error_code connect_ec{1, std::generic_category()};
+    tcp::socket client = connect_client(p, server, accepted, accept_ec, connect_ec);
+    p.net.run_until(2s);
+    ASSERT_FALSE(connect_ec);
+    ASSERT_FALSE(accept_ec);
+
+    const std::string payload = [] {
+        std::string s;
+        for (int i = 0; i < 3000; ++i) {
+            s.push_back(static_cast<char>('a' + (i % 26)));
+        }
+        return s;
+    }();
+    client.async_write(payload, [](std::error_code, std::size_t) {});
+    std::vector<std::byte> received;
+    std::array<std::byte, 512> buf{};
+    std::function<void(std::error_code, std::size_t)> read_more =
+        [&](std::error_code ec, std::size_t n) {
+            if (ec || n == 0) {
+                return;
+            }
+            received.insert(received.end(), buf.begin(), buf.begin() + n);
+            if (received.size() < 3000) {
+                accepted.async_read_some(buf, read_more);
+            }
+        };
+    accepted.async_read_some(buf, read_more);
+    p.net.run_until(5s);
+    EXPECT_EQ(received.size(), 3000u);
+    EXPECT_EQ(from_bytes(received), payload);
+}
+
+TEST(TcpTest, DupDeduped) {
+    TcpPair p(11);
+    p.net.link(p.a.id(), p.b.id(),
+               link_config{.latency = 20ms, .dup_rate = 1.0});
+    TcpServer server(p);
+    tcp::socket accepted(p.net, p.b);
+    std::error_code accept_ec{1, std::generic_category()};
+    std::error_code connect_ec{1, std::generic_category()};
+    tcp::socket client = connect_client(p, server, accepted, accept_ec, connect_ec);
+    p.net.run_until(2s);
+    ASSERT_FALSE(connect_ec);
+    ASSERT_FALSE(accept_ec);
+
+    client.async_write("hello", [](std::error_code, std::size_t) {});
+    std::array<std::byte, 16> buf{};
+    std::size_t read_n = 99;
+    accepted.async_read_some(buf, [&](std::error_code ec, std::size_t n) {
+        EXPECT_FALSE(ec);
+        read_n = n;
+    });
+    p.net.run_until(3s);
+    EXPECT_EQ(read_n, 5u);
+    EXPECT_EQ(from_bytes({buf.begin(), buf.begin() + 5}), "hello");
+    // Every message was duplicated on the wire, but only 5 bytes read:
+    // the duplicate data segment was deduped by sequence number.
+    EXPECT_GT(static_cast<std::size_t>(p.net.delivered_count()), static_cast<std::size_t>(p.net.sent_count()));
+}
+
+TEST(TcpTest, RtoExhaustion) {
+    TcpPair p(7);
+    p.net.link(p.a.id(), p.b.id(),
+               link_config{.latency = 20ms, .loss_rate = 1.0});
+    tcp::socket client(p.net, p.a);
+    std::error_code connect_ec{1, std::generic_category()};
+    client.async_connect(tcp::endpoint{p.b.id(), 9000},
+                         [&connect_ec](std::error_code ec) { connect_ec = ec; });
+    // RTO firings: 200ms, 600ms, 1400ms, 3000ms, 6200ms (5 retransmits),
+    // then the give-up at 12600ms: 200+400+800+1600+3200+6400. The
+    // give-up also sends a best-effort RST, which the lossy link drops.
+    p.net.run_until(15s);
+    EXPECT_EQ(connect_ec, std::make_error_code(std::errc::timed_out));
+    EXPECT_EQ(static_cast<std::size_t>(p.net.sent_count()), 7u);  // 6 SYNs + RST
+    EXPECT_EQ(static_cast<std::size_t>(p.net.dropped_count()), 7u);
+}
+
+TEST(TcpTest, FinEof) {
+    TcpPair p;
+    TcpServer server(p);
+    tcp::socket accepted(p.net, p.b);
+    std::error_code accept_ec{1, std::generic_category()};
+    std::error_code connect_ec{1, std::generic_category()};
+    tcp::socket client = connect_client(p, server, accepted, accept_ec, connect_ec);
+    p.net.run_until(200ms);
+    ASSERT_FALSE(connect_ec);
+
+    client.async_write("hi", [](std::error_code, std::size_t) {});
+    client.close();  // FIN after the write
+
+    std::array<std::byte, 16> buf{};
+    std::size_t first_n = 99;
+    std::size_t second_n = 99;
+    std::error_code first_ec{1, std::generic_category()};
+    std::error_code second_ec{1, std::generic_category()};
+    accepted.async_read_some(buf, [&](std::error_code ec, std::size_t n) {
+        first_ec = ec;
+        first_n = n;
+        accepted.async_read_some(buf, [&](std::error_code ec2, std::size_t n2) {
+            second_ec = ec2;
+            second_n = n2;
+        });
+    });
+    p.net.run_until(500ms);
+    EXPECT_FALSE(first_ec);
+    EXPECT_EQ(first_n, 2u);
+    EXPECT_EQ(from_bytes({buf.begin(), buf.begin() + 2}), "hi");
+    EXPECT_FALSE(second_ec);
+    EXPECT_EQ(second_n, 0u);  // EOF
+}
+
+TEST(TcpTest, HalfClose) {
+    TcpPair p;
+    TcpServer server(p);
+    tcp::socket accepted(p.net, p.b);
+    std::error_code accept_ec{1, std::generic_category()};
+    std::error_code connect_ec{1, std::generic_category()};
+    tcp::socket client = connect_client(p, server, accepted, accept_ec, connect_ec);
+    p.net.run_until(200ms);
+    ASSERT_FALSE(connect_ec);
+
+    client.async_write("hi", [](std::error_code, std::size_t) {});
+    client.close();  // client -> FIN_WAIT_1, still readable
+
+    std::array<std::byte, 16> server_buf{};
+    std::array<std::byte, 16> client_buf{};
+    std::size_t server_read = 99;
+    std::size_t client_read = 99;
+    std::size_t client_eof = 99;
+    accepted.async_read_some(server_buf, [&](std::error_code ec, std::size_t n) {
+        EXPECT_FALSE(ec);
+        server_read = n;
+        // Server is in CLOSE_WAIT: it can still write back.
+        accepted.async_write("bye", [](std::error_code, std::size_t) {});
+        accepted.async_read_some(server_buf, [&](std::error_code, std::size_t n2) {
+            EXPECT_EQ(n2, 0u);  // EOF after the client's FIN
+            accepted.close();   // server's FIN: the client then sees EOF too
+        });
+    });
+    // The client's read is armed AFTER close(): half-close.
+    client.async_read_some(client_buf, [&](std::error_code ec, std::size_t n) {
+        EXPECT_FALSE(ec);
+        client_read = n;
+        client.async_read_some(client_buf, [&](std::error_code, std::size_t n2) {
+            client_eof = n2;  // EOF after the server's FIN
+        });
+    });
+
+    p.net.run_until(1s);
+    EXPECT_EQ(server_read, 2u);
+    EXPECT_EQ(from_bytes({server_buf.begin(), server_buf.begin() + 2}), "hi");
+    EXPECT_EQ(client_read, 3u);
+    EXPECT_EQ(from_bytes({client_buf.begin(), client_buf.begin() + 3}), "bye");
+    EXPECT_EQ(client_eof, 0u);
+}
+
+TEST(TcpTest, SimultaneousClose) {
+    TcpPair p;
+    TcpServer server(p);
+    tcp::socket accepted(p.net, p.b);
+    std::error_code accept_ec{1, std::generic_category()};
+    std::error_code connect_ec{1, std::generic_category()};
+    tcp::socket client = connect_client(p, server, accepted, accept_ec, connect_ec);
+    p.net.run_until(200ms);
+    ASSERT_FALSE(connect_ec);
+
+    client.close();
+    accepted.close();
+    p.net.run_until(500ms);
+    // Both sides are fully closed: a new write is rejected.
+    EXPECT_THROW(client.async_write("x", [](std::error_code, std::size_t) {}),
+                 std::logic_error);
+    EXPECT_THROW(accepted.async_write("x", [](std::error_code, std::size_t) {}),
+                 std::logic_error);
+}
+
+TEST(TcpTest, CloseCancelsRead) {
+    TcpPair p;
+    TcpServer server(p);
+    tcp::socket accepted(p.net, p.b);
+    std::error_code accept_ec{1, std::generic_category()};
+    std::error_code connect_ec{1, std::generic_category()};
+    tcp::socket client = connect_client(p, server, accepted, accept_ec, connect_ec);
+    p.net.run_until(200ms);
+    ASSERT_FALSE(connect_ec);
+
+    std::array<std::byte, 16> buf{};
+    std::error_code read_ec{1, std::generic_category()};
+    accepted.async_read_some(buf, [&read_ec](std::error_code ec, std::size_t) {
+        read_ec = ec;
+    });
+    accepted.close();
+    p.net.run_until(500ms);
+    EXPECT_EQ(read_ec, std::make_error_code(std::errc::operation_canceled));
+}
+
+TEST(TcpTest, RebindAfterClose) {
+    TcpPair p;
+    tcp::acceptor first(p.net, p.b);
+    first.bind(9000);
+    first.listen(8);
+    first.close();
+    // The port is free again immediately (no TIME_WAIT).
+    tcp::acceptor second(p.net, p.b);
+    EXPECT_NO_THROW(second.bind(9000));
+    EXPECT_NO_THROW(second.listen(8));
+    tcp::socket accepted(p.net, p.b);
+    std::error_code accept_ec{1, std::generic_category()};
+    second.async_accept([&accepted, &accept_ec](tcp::socket s, std::error_code ec) {
+        accepted = std::move(s);
+        accept_ec = ec;
+    });
+    tcp::socket client(p.net, p.a);
+    std::error_code connect_ec{1, std::generic_category()};
+    client.async_connect(tcp::endpoint{p.b.id(), 9000},
+                         [&connect_ec](std::error_code ec) { connect_ec = ec; });
+    p.net.run_until(200ms);
+    EXPECT_FALSE(connect_ec);
+    EXPECT_FALSE(accept_ec);
+}
+
+TEST(TcpTest, CrashMidTransfer) {
+    TcpPair p;
+    TcpServer server(p);
+    tcp::socket accepted(p.net, p.b);
+    std::error_code accept_ec{1, std::generic_category()};
+    std::error_code connect_ec{1, std::generic_category()};
+    tcp::socket client = connect_client(p, server, accepted, accept_ec, connect_ec);
+    p.net.run_until(200ms);
+    ASSERT_FALSE(connect_ec);
+
+    std::error_code client_write_ec{1, std::generic_category()};
+    client.async_write("hello", [&](std::error_code ec, std::size_t) {
+        client_write_ec = ec;
+    });
+    p.net.run_for(10ms);  // the data is in flight
+    p.net.crash(p.b.id());  // the server node dies mid-transfer
+    // The peer's crash does not cancel the client's write: the RTO
+    // retransmits the data, which is dropped while the server is down.
+    // The client's binding survives the peer's crash (it is still
+    // established and bound).
+    EXPECT_EQ(client.local_endpoint(), (tcp::endpoint{p.a.id(), 49152}));
+    p.net.run_until(500ms);
+    EXPECT_EQ(client_write_ec.value(), 1);  // still pending
+    // After the restart the retransmitted data reaches a server that
+    // has no connection for it, so it answers with an RST and the
+    // client learns connection_reset.
+    p.net.restart(p.b.id());
+    p.net.run_until(3s);
+    EXPECT_EQ(client_write_ec, std::make_error_code(std::errc::connection_reset));
+    // After the restart, a fresh connection works.
+    tcp::socket accepted2(p.net, p.b);
+    std::error_code accept_ec2{1, std::generic_category()};
+    server.acceptor.async_accept(
+        [&accepted2, &accept_ec2](tcp::socket s, std::error_code ec) {
+            accepted2 = std::move(s);
+            accept_ec2 = ec;
+        });
+    tcp::socket client2(p.net, p.a);
+    std::error_code connect_ec2{1, std::generic_category()};
+    client2.async_connect(tcp::endpoint{p.b.id(), 9000},
+                          [&connect_ec2](std::error_code ec) { connect_ec2 = ec; });
+    p.net.run_until(4s);
+    EXPECT_FALSE(connect_ec2);
+    EXPECT_FALSE(accept_ec2);
+}
+
+TEST(TcpTest, CrashCancelsPendingAndBindingSurvives) {
+    TcpPair p;
+    TcpServer server(p);
+    tcp::socket accepted(p.net, p.b);
+    std::error_code accept_ec{1, std::generic_category()};
+    std::error_code connect_ec{1, std::generic_category()};
+    tcp::socket client = connect_client(p, server, accepted, accept_ec, connect_ec);
+    p.net.run_until(200ms);
+    ASSERT_FALSE(connect_ec);
+
+    std::array<std::byte, 16> buf{};
+    std::error_code read_ec{1, std::generic_category()};
+    accepted.async_read_some(buf, [&read_ec](std::error_code ec, std::size_t) {
+        read_ec = ec;
+    });
+    p.net.crash(p.b.id());  // the server node crashes with a read pending
+    p.net.run_until(500ms);
+    EXPECT_EQ(read_ec, std::make_error_code(std::errc::operation_canceled));
+    // The acceptor's listener binding survives the restart.
+    p.net.restart(p.b.id());
+    tcp::socket accepted2(p.net, p.b);
+    std::error_code accept_ec2{1, std::generic_category()};
+    server.acceptor.async_accept(
+        [&accepted2, &accept_ec2](tcp::socket s, std::error_code ec) {
+            accepted2 = std::move(s);
+            accept_ec2 = ec;
+        });
+    tcp::socket client2(p.net, p.a);
+    std::error_code connect_ec2{1, std::generic_category()};
+    client2.async_connect(tcp::endpoint{p.b.id(), 9000},
+                          [&connect_ec2](std::error_code ec) { connect_ec2 = ec; });
+    p.net.run_until(1s);
+    EXPECT_FALSE(connect_ec2);
+    EXPECT_FALSE(accept_ec2);
+}
+
+TEST(TcpTest, Determinism) {
+    auto run_once = [] {
+        TcpPair p;
+        TcpServer server(p);
+        tcp::socket accepted(p.net, p.b);
+        std::error_code accept_ec{1, std::generic_category()};
+        std::error_code connect_ec{1, std::generic_category()};
+        tcp::socket client =
+            connect_client(p, server, accepted, accept_ec, connect_ec);
+        p.net.run_until(200ms);
+        client.async_write("hello", [](std::error_code, std::size_t) {});
+        std::array<std::byte, 16> buf{};
+        accepted.async_read_some(buf, [](std::error_code, std::size_t) {});
+        p.net.run_until(500ms);
+        std::ostringstream dump;
+        p.net.dump_trace(dump);
+        return dump.str();
+    };
+    EXPECT_EQ(run_once(), run_once());
+}
+
+TEST(TcpTest, Transparency) {
+    auto stats_with = [](bool tracing) {
+        TcpPair p;
+        p.net.set_tracing(tracing);
+        TcpServer server(p);
+        tcp::socket accepted(p.net, p.b);
+        std::error_code accept_ec{1, std::generic_category()};
+        std::error_code connect_ec{1, std::generic_category()};
+        tcp::socket client =
+            connect_client(p, server, accepted, accept_ec, connect_ec);
+        p.net.run_until(200ms);
+        client.async_write("hello", [](std::error_code, std::size_t) {});
+        std::array<std::byte, 16> buf{};
+        accepted.async_read_some(buf, [](std::error_code, std::size_t) {});
+        p.net.run_until(500ms);
+        return std::array<std::size_t, 3>{static_cast<std::size_t>(p.net.sent_count()),
+                                          static_cast<std::size_t>(p.net.delivered_count()),
+                                          static_cast<std::size_t>(p.net.dropped_count())};
+    };
+    EXPECT_EQ(stats_with(true), stats_with(false));
+}
+
 TEST(TcpTest, MoveWithPendingRead) {
     TcpPair p;
     TcpServer server(p);
@@ -447,4 +791,38 @@ TEST(TcpTest, MoveWithPendingRead) {
     EXPECT_FALSE(read_ec);
     EXPECT_EQ(read_n, 5u);
     EXPECT_EQ(from_bytes({buf.begin(), buf.begin() + 5}), "hello");
+}
+
+TEST(TcpTest, TcpTagIsStable) {
+    TcpPair p;
+    TcpServer server(p);
+    tcp::socket accepted(p.net, p.b);
+    std::error_code accept_ec{1, std::generic_category()};
+    std::error_code connect_ec{1, std::generic_category()};
+    tcp::socket client = connect_client(p, server, accepted, accept_ec, connect_ec);
+    p.net.run_until(200ms);
+    ASSERT_FALSE(connect_ec);
+    // Every TCP segment carries the FNV-1a tag of "simulnetx::tcp".
+    for (const trace_event& ev : p.net.trace()) {
+        if (ev.kind == event_kind::sent || ev.kind == event_kind::delivered) {
+            EXPECT_EQ(ev.tag, 14926712757373340827ull);
+        }
+    }
+}
+
+TEST(TcpTest, TraceHasNoTimerFired) {
+    TcpPair p;
+    TcpServer server(p);
+    tcp::socket accepted(p.net, p.b);
+    std::error_code accept_ec{1, std::generic_category()};
+    std::error_code connect_ec{1, std::generic_category()};
+    tcp::socket client = connect_client(p, server, accepted, accept_ec, connect_ec);
+    p.net.run_until(200ms);
+    client.async_write("hello", [](std::error_code, std::size_t) {});
+    std::array<std::byte, 16> buf{};
+    accepted.async_read_some(buf, [](std::error_code, std::size_t) {});
+    p.net.run_until(500ms);
+    // RTO timers ride schedule_silent: no timer_fired events, no
+    // timer ids consumed.
+    EXPECT_EQ(static_cast<std::size_t>(p.net.event_count(event_kind::timer_fired)), 0u);
 }

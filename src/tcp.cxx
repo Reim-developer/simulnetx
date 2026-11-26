@@ -27,9 +27,6 @@ std::uint64_t segment_end(const tcp_pending_segment& seg) {
 
 }  // namespace
 
-
-
-
 void tcp_connection::bind(std::uint16_t port) {
     if (!open_) {
         throw std::logic_error("simulnetx: bind on a closed socket");
@@ -63,156 +60,161 @@ endpoint tcp_connection::remote_endpoint() const {
     return peer_;
 }
 
-void tcp_connection::init_server_side(std::uint16_t listen_port, endpoint peer,
-                                      std::uint64_t peer_seq, acceptor* owner) {
-    bound_ = true;
-    owns_port_claim_ = false;  // the acceptor owns the (node, port) claim
-    port_ = listen_port;
+void tcp_connection::async_connect(endpoint peer, connect_handler handler) {
+    if (!open_) {
+        throw std::logic_error("simulnetx: async_connect on a closed socket");
+    }
+    if (state_ != state::closed) {
+        throw std::logic_error("simulnetx: async_connect on a connected socket");
+    }
+    ensure_bound();
+    connect_handler_ = std::move(handler);
     peer_ = peer;
-    acceptor_ = owner;
-    recv_next_ = peer_seq + 1;
-    send_next_ = 1;  // our SYN (seq 0) consumes 1
-    state_ = state::syn_rcvd;
-    unacked_.push_back(tcp_pending_segment{0, tcp_flag_syn | tcp_flag_ack, {}});
-    register_connection();
+    // Send the SYN first: nothing is registered yet, so a synchronous
+    // send failure (no link, unknown node, crashed sender) leaves no
+    // state behind and the handler never fires.
+    send_raw(tcp_flag_syn, 0, 0, {});
+    send_next_ = 1;
+    unacked_.push_back(tcp_pending_segment{0, tcp_flag_syn, {}});
+    state_ = state::syn_sent;
+    try {
+        register_connection();
+    } catch (...) {
+        // Unreachable in practice (the ephemeral port is fresh, so no
+        // 4-tuple collision is possible), but leave no half-built
+        // state behind if it ever happens.
+        state_ = state::closed;
+        unacked_.clear();
+        connect_handler_ = nullptr;
+        throw;
+    }
+    arm_rto(tcp_rto_initial);
 }
 
-void tcp_connection::send_syn_ack() {
-    send_raw(tcp_flag_syn | tcp_flag_ack, 0, recv_next_, {});
-}
-
-void tcp_connection::handle_reset() {
-    if (state_ == state::syn_sent) {
-        // Refused: either no listener on the peer's port (the
-        // network-generated RST) or the peer went away mid-handshake.
-        reset_with(std::make_error_code(std::errc::connection_refused));
+void tcp_connection::async_write(std::span<const std::byte> data,
+                                 write_handler handler) {
+    if (!open_) {
+        throw std::logic_error("simulnetx: async_write on a closed socket");
+    }
+    if (state_ != state::established && state_ != state::close_wait) {
+        throw std::logic_error("simulnetx: async_write on an unconnected socket");
+    }
+    if (data.empty()) {
+        // Legal, sends nothing: complete via a zero-delay event, never
+        // synchronously.
+        fire_later([handler = std::move(handler)] { handler(std::error_code{}, 0); });
         return;
     }
-    if (state_ == state::syn_rcvd) {
-        // The peer went away mid-handshake: drop silently. The
-        // acceptor erases this socket; the destructor's close() is a
-        // no-op because reset_with already tore it down. A client
-        // socket that reached SYN_RCVD via simultaneous open has a
-        // pending connect handler, and it must report connection_reset
-        // (never success); a server half-open socket has none.
-        reset_received_ = true;
-        reset_with(connect_handler_
-                       ? std::make_error_code(std::errc::connection_reset)
-                       : std::error_code{});
-        if (acceptor_ != nullptr) {
-            acceptor* owner = acceptor_;
-            acceptor_ = nullptr;
-            owner->drop_half_open(shared_from_this());
-        }
-        return;
+    // Queue the write before sending: the segments are numbered from
+    // send_next_ in order, so the op's end_seq is known up front. If a
+    // send throws (unreachable in practice: every segment takes the
+    // same link), the op stays queued and its bytes complete on ACK or
+    // on teardown, so no write is silently lost.
+    tcp_write_op op;
+    op.end_seq = send_next_ + data.size();
+    op.total = data.size();
+    op.handler = std::move(handler);
+    writes_.push_back(std::move(op));
+    std::size_t offset = 0;
+    while (offset < data.size()) {
+        const std::size_t chunk = std::min(tcp_mss, data.size() - offset);
+        const auto begin = data.begin() + static_cast<std::ptrdiff_t>(offset);
+        std::vector<std::byte> payload(begin, begin + static_cast<std::ptrdiff_t>(chunk));
+        const std::uint64_t seq = send_next_;
+        send_raw(tcp_flag_ack, seq, recv_next_, payload);
+        unacked_.push_back(tcp_pending_segment{seq, tcp_flag_ack, std::move(payload)});
+        send_next_ += chunk;
+        offset += chunk;
     }
-    reset_with(std::make_error_code(std::errc::connection_reset));
+    if (!rto_armed_) {
+        arm_rto(tcp_rto_initial);
+    }
 }
 
-void tcp_connection::complete_pending(std::error_code code) {
-    complete_connect(code);
-    complete_writes_with(code);
+void tcp_connection::async_read_some(std::span<std::byte> buffer,
+                                     read_handler handler) {
+    // The peer already sent its FIN and the connection fully closed
+    // before this read was armed (the handler that arms it runs via a
+    // deferred event, so the FIN can land first): report EOF at once.
+    if (state_ == state::closed && peer_eof_) {
+        fire_later([handler = std::move(handler)] { handler(std::error_code{}, 0); });
+        return;
+    }
+    // No open_ check here: after close() the socket is still readable
+    // (half-close: FIN_WAIT_1/2/CLOSING). The state check below rejects
+    // reads on a never-connected or fully-closed socket.
+    if (state_ != state::established && state_ != state::close_wait &&
+        state_ != state::fin_wait_1 && state_ != state::fin_wait_2 &&
+        state_ != state::closing) {
+        throw std::logic_error("simulnetx: async_read_some on an unconnected socket");
+    }
     if (read_pending_) {
-        read_pending_ = false;
-        read_handler handler = std::move(read_handler_);
-        read_handler_ = nullptr;
-        read_buffer_ = {};
-        fire_later([handler = std::move(handler), code] { handler(code, 0); });
+        throw std::logic_error("simulnetx: a read is already pending on this socket");
     }
-}
-
-void tcp_connection::complete_connect(std::error_code code) {
-    if (!connect_handler_) {
-        return;
-    }
-    connect_handler handler = std::move(connect_handler_);
-    connect_handler_ = nullptr;
-    fire_later([handler = std::move(handler), code] { handler(code); });
-}
-
-void tcp_connection::complete_writes_with(std::error_code code) {
-    while (!writes_.empty()) {
-        tcp_write_op op = std::move(writes_.front());
-        writes_.pop_front();
-        fire_later([handler = std::move(op.handler), code] { handler(code, 0); });
-    }
-}
-
-void tcp_connection::send_raw(std::uint32_t flags, std::uint64_t seq,
-                              std::uint64_t ack, std::vector<std::byte> payload) {
-    node_->send_segment(peer_.node, port_, peer_.port, flags, seq, ack,
-                        std::move(payload));
-}
-
-void tcp_connection::send_best_effort(std::uint32_t flags, std::uint64_t seq,
-                                      std::uint64_t ack,
-                                      std::vector<std::byte> payload) {
-    try {
-        send_raw(flags, seq, ack, std::move(payload));
-    } catch (...) {
-        // Protocol machinery never aborts run_until: the RTO degrades
-        // to timed_out instead.
-    }
-}
-
-void tcp_connection::send_ack() {
-    send_best_effort(tcp_flag_ack, send_next_, recv_next_, {});
-}
-
-void tcp_connection::send_reset_best_effort() {
-    if (reset_received_) {
-        return;  // An RST never answers an RST.
-    }
-    try {
-        node_->send_segment(peer_.node, port_, peer_.port, tcp_flag_rst, 0, 0, {});
-    } catch (...) {
-    }
-}
-
-void tcp_connection::fire_later(std::function<void()> completion) {
-    net_->schedule_silent(std::move(completion));
-}
-
-void tcp_connection::register_connection() {
-    net_->register_tcp_connection(
-        network::tcp_key{node_->id(), port_, peer_.node, peer_.port},
-        shared_from_this());
-}
-
-void tcp_connection::unregister_connection() {
-    net_->unregister_tcp_connection(
-        network::tcp_key{node_->id(), port_, peer_.node, peer_.port});
-}
-
-void tcp_connection::release_port() {
-    if (!bound_) {
-        return;
-    }
-    if (owns_port_claim_) {
-        net_->release_tcp_port(node_->id(), port_);
-    }
-    bound_ = false;
+    read_buffer_ = buffer;
+    read_handler_ = std::move(handler);
+    read_pending_ = true;
+    maybe_complete_read();
 }
 
 void tcp_connection::close() {
-    // Simple teardown (v0.7.0 commit 1): no FIN yet - the graceful FIN
-    // close lands with the retransmit/close commit. The socket just
-    // goes away; the peer learns via its own RTO.
     if (!open_) {
         return;
     }
-    if (state_ == state::syn_sent) {
-        send_reset_best_effort();
-        complete_connect(std::make_error_code(std::errc::operation_canceled));
+    if (state_ == state::closed) {
+        // No connection to tear down (never connected, or already dead
+        // via crash/reset/timeout): just release the port claim.
+        release_port();
+        open_ = false;
+        return;
     }
-    if (state_ == state::syn_rcvd) {
+    if (state_ == state::syn_sent || state_ == state::syn_rcvd) {
+        // Abandon the handshake: RST the peer (best-effort) and cancel
+        // the connect handler if it is ours.
         send_reset_best_effort();
+        if (state_ == state::syn_sent) {
+            complete_connect(std::make_error_code(std::errc::operation_canceled));
+        }
+        unregister_connection();
+        disarm_rto();
+        release_port();
+        open_ = false;
+        connected_ = false;
+        state_ = state::closed;
+        return;
     }
-    unregister_connection();
-    release_port();
-    open_ = false;
-    connected_ = false;
-    state_ = state::closed;
+    if (state_ == state::established || state_ == state::close_wait) {
+        // Graceful close: FIN after the queued writes (they were all
+        // sent already - writes go out immediately, so there is nothing
+        // to drain). A pending read is cancelled; pending writes stay
+        // queued and complete on ACK (the FIN's ACK implies them).
+        const std::uint64_t fin_seq = send_next_;
+        fin_seq_ = fin_seq;
+        send_best_effort(tcp_flag_fin | tcp_flag_ack, fin_seq, recv_next_, {});
+        unacked_.push_back(
+            tcp_pending_segment{fin_seq, tcp_flag_fin | tcp_flag_ack, {}});
+        send_next_ += 1;
+        state_ = state_ == state::established ? state::fin_wait_1 : state::last_ack;
+        if (read_pending_) {
+            read_pending_ = false;
+            read_handler handler = std::move(read_handler_);
+            read_handler_ = nullptr;
+            read_buffer_ = {};
+            fire_later([handler = std::move(handler)] {
+                handler(std::make_error_code(std::errc::operation_canceled), 0);
+            });
+        }
+        if (!rto_armed_) {
+            arm_rto(tcp_rto_initial);
+        }
+        release_port();
+        open_ = false;
+        connected_ = false;
+        return;
+    }
+    // Already closing (fin_wait_1/2, last_ack, closing): close() is
+    // idempotent for the state machine, and open_ is already false,
+    // so this path is unreachable. Defensive no-op.
 }
 
 void tcp_connection::on_segment(node_id from, std::uint16_t src_port,
@@ -296,14 +298,20 @@ void tcp_connection::on_segment(node_id from, std::uint16_t src_port,
 }
 
 void tcp_connection::on_node_crashed() {
-    // Minimal teardown (v0.7.0 commit 1): the full version (clearing
-    // reassembly/recv buffers, disarming the RTO) lands with the
-    // retransmit/close/crash commit.
     if (!open_) {
-        return;
+        return;  // Already closed: nothing to cancel.
     }
+    // Cancel every pending op (connect, read, writes) with
+    // operation_canceled; drop all connection state. The binding
+    // survives: bound_ and port_ are untouched, so the socket can
+    // connect again after the restart.
     complete_pending(std::make_error_code(std::errc::operation_canceled));
     unregister_connection();
+    disarm_rto();
+    unacked_.clear();
+    writes_.clear();
+    reassembly_.clear();
+    recv_ready_.clear();
     connected_ = false;
     peer_eof_ = false;
     fin_queued_ = false;
@@ -315,10 +323,240 @@ void tcp_connection::on_node_crashed() {
     }
 }
 
+void tcp_connection::init_server_side(std::uint16_t listen_port, endpoint peer,
+                                      std::uint64_t peer_seq, acceptor* owner) {
+    bound_ = true;
+    owns_port_claim_ = false;  // the acceptor owns the (node, port) claim
+    port_ = listen_port;
+    peer_ = peer;
+    acceptor_ = owner;
+    recv_next_ = peer_seq + 1;
+    send_next_ = 1;  // our SYN (seq 0) consumes 1
+    state_ = state::syn_rcvd;
+    unacked_.push_back(tcp_pending_segment{0, tcp_flag_syn | tcp_flag_ack, {}});
+    register_connection();
+    arm_rto(tcp_rto_initial);
+}
+
+void tcp_connection::send_syn_ack() {
+    send_raw(tcp_flag_syn | tcp_flag_ack, 0, recv_next_, {});
+}
+
 void tcp_connection::resend_syn_ack() {
-    // No RTO restart yet (v0.7.0 commit 1): the RTO lands with the
-    // retransmit commit, which also restarts it here.
+    // The SYN+ACK is already the unacked segment (from
+    // init_server_side), so this just re-sends it and restarts the RTO.
     send_best_effort(tcp_flag_syn | tcp_flag_ack, 0, recv_next_, {});
+    rto_retries_ = 0;
+    arm_rto(tcp_rto_initial);
+}
+
+void tcp_connection::on_rto(std::uint64_t generation) {
+    if (generation != rto_generation_ || !rto_armed_) {
+        return;  // Stale timer (disarmed or superseded).
+    }
+    if (unacked_.empty()) {
+        disarm_rto();
+        return;
+    }
+    if (rto_retries_ >= tcp_max_retransmits) {
+        // Give up: the connection is torn down and pending ops report
+        // timed_out. A server-side half-open connection is dropped
+        // silently (the client's RTO reports timed_out too); any other
+        // state sends an RST so the peer learns fast.
+        if (state_ == state::syn_rcvd) {
+            abandon();
+            // A client socket that reached SYN_RCVD via simultaneous
+            // open has a pending connect handler; a server half-open
+            // socket has none (complete_connect is a no-op then).
+            complete_connect(std::make_error_code(std::errc::timed_out));
+            if (acceptor_ != nullptr) {
+                acceptor* owner = acceptor_;
+                acceptor_ = nullptr;
+                owner->drop_half_open(shared_from_this());
+            }
+            return;
+        }
+        send_reset_best_effort();
+        complete_pending(std::make_error_code(std::errc::timed_out));
+        unregister_connection();
+        disarm_rto();
+        release_port();
+        open_ = false;
+        connected_ = false;
+        state_ = state::closed;
+        return;
+    }
+    // Retransmit the oldest unacked segment with a fresh ACK.
+    const tcp_pending_segment seg = unacked_.front();
+    send_best_effort(seg.flags, seg.seq, recv_next_, seg.payload);
+    ++rto_retries_;
+    rto_delay_ *= 2;
+    arm_rto(rto_delay_);
+}
+
+void tcp_connection::abandon() {
+    unregister_connection();
+    disarm_rto();
+    open_ = false;
+    connected_ = false;
+    state_ = state::closed;
+}
+
+void tcp_connection::reset_with(std::error_code code) {
+    complete_pending(code);
+    unregister_connection();
+    disarm_rto();
+    release_port();
+    open_ = false;
+    connected_ = false;
+    state_ = state::closed;
+}
+
+void tcp_connection::complete_pending(std::error_code code) {
+    complete_connect(code);
+    complete_writes_with(code);
+    if (read_pending_) {
+        read_pending_ = false;
+        read_handler handler = std::move(read_handler_);
+        read_handler_ = nullptr;
+        read_buffer_ = {};
+        fire_later([handler = std::move(handler), code] { handler(code, 0); });
+    }
+}
+
+void tcp_connection::complete_connect(std::error_code code) {
+    if (!connect_handler_) {
+        return;
+    }
+    connect_handler handler = std::move(connect_handler_);
+    connect_handler_ = nullptr;
+    fire_later([handler = std::move(handler), code] { handler(code); });
+}
+
+void tcp_connection::complete_writes_up_to(std::uint64_t acked) {
+    while (!writes_.empty() && writes_.front().end_seq <= acked) {
+        tcp_write_op op = std::move(writes_.front());
+        writes_.pop_front();
+        fire_later([handler = std::move(op.handler), total = op.total] {
+            handler(std::error_code{}, total);
+        });
+    }
+}
+
+void tcp_connection::complete_writes_with(std::error_code code) {
+    while (!writes_.empty()) {
+        tcp_write_op op = std::move(writes_.front());
+        writes_.pop_front();
+        fire_later([handler = std::move(op.handler), code] { handler(code, 0); });
+    }
+}
+
+void tcp_connection::arm_rto(std::chrono::nanoseconds delay) {
+    ++rto_generation_;
+    const std::uint64_t generation = rto_generation_;
+    rto_armed_ = true;
+    rto_delay_ = delay;
+    std::weak_ptr<tcp_connection> weak = shared_from_this();
+    net_->schedule_silent_at(net_->now() + delay, [weak, generation] {
+        if (const auto self = weak.lock()) {
+            self->on_rto(generation);
+        }
+    });
+}
+
+void tcp_connection::disarm_rto() {
+    ++rto_generation_;
+    rto_armed_ = false;
+}
+
+void tcp_connection::send_raw(std::uint32_t flags, std::uint64_t seq,
+                              std::uint64_t ack, std::vector<std::byte> payload) {
+    node_->send_segment(peer_.node, port_, peer_.port, flags, seq, ack,
+                        std::move(payload));
+}
+
+void tcp_connection::send_best_effort(std::uint32_t flags, std::uint64_t seq,
+                                      std::uint64_t ack,
+                                      std::vector<std::byte> payload) {
+    try {
+        send_raw(flags, seq, ack, std::move(payload));
+    } catch (...) {
+        // Protocol machinery never aborts run_until: the RTO degrades
+        // to timed_out instead.
+    }
+}
+
+void tcp_connection::send_ack() {
+    send_best_effort(tcp_flag_ack, send_next_, recv_next_, {});
+}
+
+void tcp_connection::send_reset_best_effort() {
+    if (reset_received_) {
+        return;  // An RST never answers an RST.
+    }
+    try {
+        node_->send_segment(peer_.node, port_, peer_.port, tcp_flag_rst, 0, 0, {});
+    } catch (...) {
+    }
+}
+
+void tcp_connection::fire_later(std::function<void()> completion) {
+    net_->schedule_silent(std::move(completion));
+}
+
+void tcp_connection::register_connection() {
+    net_->register_tcp_connection(
+        network::tcp_key{node_->id(), port_, peer_.node, peer_.port},
+        shared_from_this());
+}
+
+void tcp_connection::unregister_connection() {
+    net_->unregister_tcp_connection(
+        network::tcp_key{node_->id(), port_, peer_.node, peer_.port});
+}
+
+void tcp_connection::release_port() {
+    if (!bound_) {
+        return;
+    }
+    if (owns_port_claim_) {
+        net_->release_tcp_port(node_->id(), port_);
+    }
+    bound_ = false;
+}
+
+void tcp_connection::finish_close() {
+    disarm_rto();
+    unregister_connection();
+    state_ = state::closed;
+}
+
+void tcp_connection::handle_reset() {
+    if (state_ == state::syn_sent) {
+        // Refused: either no listener on the peer's port (the
+        // network-generated RST) or the peer went away mid-handshake.
+        reset_with(std::make_error_code(std::errc::connection_refused));
+        return;
+    }
+    if (state_ == state::syn_rcvd) {
+        // The peer went away mid-handshake: drop silently. The
+        // acceptor erases this socket; the destructor's close() is a
+        // no-op because reset_with already tore it down. A client
+        // socket that reached SYN_RCVD via simultaneous open has a
+        // pending connect handler, and it must report connection_reset
+        // (never success); a server half-open socket has none.
+        reset_received_ = true;
+        reset_with(connect_handler_
+                       ? std::make_error_code(std::errc::connection_reset)
+                       : std::error_code{});
+        if (acceptor_ != nullptr) {
+            acceptor* owner = acceptor_;
+            acceptor_ = nullptr;
+            owner->drop_half_open(shared_from_this());
+        }
+        return;
+    }
+    reset_with(std::make_error_code(std::errc::connection_reset));
 }
 
 void tcp_connection::handle_syn_sent(bool is_syn, bool is_ack, std::uint64_t seq,
@@ -332,6 +570,7 @@ void tcp_connection::handle_syn_sent(bool is_syn, bool is_ack, std::uint64_t seq
         if (!unacked_.empty() && unacked_.front().seq == 0) {
             unacked_.pop_front();
         }
+        disarm_rto();
         state_ = state::established;
         connected_ = true;
         if (!payload.empty()) {
@@ -369,6 +608,7 @@ void tcp_connection::handle_syn_rcvd(bool is_syn, bool is_ack, std::uint64_t seq
         if (!unacked_.empty() && unacked_.front().seq == 0) {
             unacked_.pop_front();
         }
+        disarm_rto();
         state_ = state::established;
         connected_ = true;
         if (!payload.empty()) {
@@ -388,113 +628,11 @@ void tcp_connection::handle_syn_rcvd(bool is_syn, bool is_ack, std::uint64_t seq
     if (is_syn && !is_ack) {
         // Retransmitted SYN: resend our SYN+ACK and restart the RTO.
         send_best_effort(tcp_flag_syn | tcp_flag_ack, 0, recv_next_, {});
+        rto_retries_ = 0;
+        arm_rto(tcp_rto_initial);
         return;
     }
     // Anything else (bare ACK with the wrong number, data, FIN): drop.
-}
-
-void tcp_connection::reset_with(std::error_code code) {
-    // No disarm_rto yet (v0.7.0 commit 1): the RTO lands with the
-    // retransmit commit.
-    complete_pending(code);
-    unregister_connection();
-    release_port();
-    open_ = false;
-    connected_ = false;
-    state_ = state::closed;
-}
-
-void tcp_connection::async_connect(endpoint peer, connect_handler handler) {
-    if (!open_) {
-        throw std::logic_error("simulnetx: async_connect on a closed socket");
-    }
-    if (state_ != state::closed) {
-        throw std::logic_error("simulnetx: async_connect on a connected socket");
-    }
-    ensure_bound();
-    connect_handler_ = std::move(handler);
-    peer_ = peer;
-    // Send the SYN first: nothing is registered yet, so a synchronous
-    // send failure (no link, unknown node, crashed sender) leaves no
-    // state behind and the handler never fires.
-    send_raw(tcp_flag_syn, 0, 0, {});
-    send_next_ = 1;
-    unacked_.push_back(tcp_pending_segment{0, tcp_flag_syn, {}});
-    state_ = state::syn_sent;
-    try {
-        register_connection();
-    } catch (...) {
-        // Unreachable in practice (the ephemeral port is fresh, so no
-        // 4-tuple collision is possible), but leave no half-built
-        // state behind if it ever happens.
-        state_ = state::closed;
-        unacked_.clear();
-        connect_handler_ = nullptr;
-        throw;
-    }
-}
-
-void tcp_connection::async_write(std::span<const std::byte> data,
-                                 write_handler handler) {
-    if (!open_) {
-        throw std::logic_error("simulnetx: async_write on a closed socket");
-    }
-    if (state_ != state::established && state_ != state::close_wait) {
-        throw std::logic_error("simulnetx: async_write on an unconnected socket");
-    }
-    if (data.empty()) {
-        // Legal, sends nothing: complete via a zero-delay event, never
-        // synchronously.
-        fire_later([handler = std::move(handler)] { handler(std::error_code{}, 0); });
-        return;
-    }
-    // Queue the write before sending: the segments are numbered from
-    // send_next_ in order, so the op's end_seq is known up front. If a
-    // send throws (unreachable in practice: every segment takes the
-    // same link), the op stays queued and its bytes complete on ACK or
-    // on teardown, so no write is silently lost.
-    tcp_write_op op;
-    op.end_seq = send_next_ + data.size();
-    op.total = data.size();
-    op.handler = std::move(handler);
-    writes_.push_back(std::move(op));
-    std::size_t offset = 0;
-    while (offset < data.size()) {
-        const std::size_t chunk = std::min(tcp_mss, data.size() - offset);
-        const auto begin = data.begin() + static_cast<std::ptrdiff_t>(offset);
-        std::vector<std::byte> payload(begin, begin + static_cast<std::ptrdiff_t>(chunk));
-        const std::uint64_t seq = send_next_;
-        send_raw(tcp_flag_ack, seq, recv_next_, payload);
-        unacked_.push_back(tcp_pending_segment{seq, tcp_flag_ack, std::move(payload)});
-        send_next_ += chunk;
-        offset += chunk;
-    }
-}
-
-void tcp_connection::async_read_some(std::span<std::byte> buffer,
-                                     read_handler handler) {
-    // The peer already sent its FIN and the connection fully closed
-    // before this read was armed (the handler that arms it runs via a
-    // deferred event, so the FIN can land first): report EOF at once.
-    if (state_ == state::closed && peer_eof_) {
-        fire_later([handler = std::move(handler)] { handler(std::error_code{}, 0); });
-        return;
-    }
-    // No open_ check here: after close() the socket is still readable
-    // (half-close: FIN_WAIT_1/2/CLOSING). The state check below rejects
-    // reads on a never-connected or fully-closed socket.
-    if (state_ != state::established && state_ != state::close_wait &&
-        state_ != state::fin_wait_1 && state_ != state::fin_wait_2 &&
-        state_ != state::closing) {
-        throw std::logic_error("simulnetx: async_read_some on an unconnected socket");
-    }
-    if (read_pending_) {
-        throw std::logic_error("simulnetx: a read is already pending on this socket");
-    }
-    read_buffer_ = buffer;
-    read_handler_ = std::move(handler);
-    read_pending_ = true;
-    maybe_complete_read();
 }
 
 bool tcp_connection::absorb(std::uint64_t seq, std::vector<std::byte> payload) {
@@ -576,6 +714,13 @@ void tcp_connection::advance_window(std::uint64_t ack) {
         finish_close();
         return;
     }
+    if (unacked_.empty()) {
+        disarm_rto();
+    } else {
+        // The RTO restarts whenever an ACK advances the send window.
+        rto_retries_ = 0;
+        arm_rto(tcp_rto_initial);
+    }
 }
 
 bool tcp_connection::process_fin() {
@@ -626,23 +771,7 @@ void tcp_connection::maybe_complete_read() {
     }
 }
 
-void tcp_connection::complete_writes_up_to(std::uint64_t acked) {
-    while (!writes_.empty() && writes_.front().end_seq <= acked) {
-        tcp_write_op op = std::move(writes_.front());
-        writes_.pop_front();
-        fire_later([handler = std::move(op.handler), total = op.total] {
-            handler(std::error_code{}, total);
-        });
-    }
-}
-
-void tcp_connection::finish_close() {
-    unregister_connection();
-    state_ = state::closed;
-}
-
 }  // namespace detail
-
 
 socket::socket(network& net, node& node)
     : conn_(std::make_shared<detail::tcp_connection>(&net, &node)) {}
@@ -812,6 +941,28 @@ void acceptor::close() {
     }
 }
 
+void acceptor::async_accept(accept_handler handler) {
+    if (!open_) {
+        throw std::logic_error("simulnetx: async_accept on a closed acceptor");
+    }
+    if (!listening_) {
+        throw std::logic_error("simulnetx: async_accept on a non-listening acceptor");
+    }
+    if (accept_pending_) {
+        throw std::logic_error("simulnetx: an accept is already pending on this acceptor");
+    }
+    if (!completed_.empty()) {
+        socket taken = std::move(completed_.front());
+        completed_.pop_front();
+        auto conn = taken.release();
+        conn->detach_acceptor();
+        fire_accept_later(std::move(handler), std::move(conn), std::error_code{});
+        return;
+    }
+    accept_handler_ = std::move(handler);
+    accept_pending_ = true;
+}
+
 void acceptor::on_syn(node_id from, std::uint16_t src_port, std::uint64_t seq) {
     if (!open_ || !listening_) {
         return;  // Defensive: the registry unregisters on close.
@@ -900,28 +1051,6 @@ void acceptor::fire_accept_later(accept_handler handler,
     net_->schedule_silent([handler = std::move(handler), conn = std::move(conn), ec] {
         handler(socket(conn), ec);
     });
-}
-
-void acceptor::async_accept(accept_handler handler) {
-    if (!open_) {
-        throw std::logic_error("simulnetx: async_accept on a closed acceptor");
-    }
-    if (!listening_) {
-        throw std::logic_error("simulnetx: async_accept on a non-listening acceptor");
-    }
-    if (accept_pending_) {
-        throw std::logic_error("simulnetx: an accept is already pending on this acceptor");
-    }
-    if (!completed_.empty()) {
-        socket taken = std::move(completed_.front());
-        completed_.pop_front();
-        auto conn = taken.release();
-        conn->detach_acceptor();
-        fire_accept_later(std::move(handler), std::move(conn), std::error_code{});
-        return;
-    }
-    accept_handler_ = std::move(handler);
-    accept_pending_ = true;
 }
 
 }  // namespace simulnetx::tcp
