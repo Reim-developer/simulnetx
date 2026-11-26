@@ -325,6 +325,36 @@ void tcp_connection::reset_with(std::error_code code) {
     state_ = state::closed;
 }
 
+void tcp_connection::async_connect(endpoint peer, connect_handler handler) {
+    if (!open_) {
+        throw std::logic_error("simulnetx: async_connect on a closed socket");
+    }
+    if (state_ != state::closed) {
+        throw std::logic_error("simulnetx: async_connect on a connected socket");
+    }
+    ensure_bound();
+    connect_handler_ = std::move(handler);
+    peer_ = peer;
+    // Send the SYN first: nothing is registered yet, so a synchronous
+    // send failure (no link, unknown node, crashed sender) leaves no
+    // state behind and the handler never fires.
+    send_raw(tcp_flag_syn, 0, 0, {});
+    send_next_ = 1;
+    unacked_.push_back(tcp_pending_segment{0, tcp_flag_syn, {}});
+    state_ = state::syn_sent;
+    try {
+        register_connection();
+    } catch (...) {
+        // Unreachable in practice (the ephemeral port is fresh, so no
+        // 4-tuple collision is possible), but leave no half-built
+        // state behind if it ever happens.
+        state_ = state::closed;
+        unacked_.clear();
+        connect_handler_ = nullptr;
+        throw;
+    }
+}
+
 }  // namespace detail
 
 
@@ -353,6 +383,10 @@ void socket::close() {
     if (conn_) {
         conn_->close();
     }
+}
+
+void socket::async_connect(endpoint peer, connect_handler handler) {
+    target().async_connect(peer, std::move(handler));
 }
 
 acceptor::acceptor(network& net, node& node) : net_(&net), node_(&node) {}
@@ -563,6 +597,28 @@ void acceptor::fire_accept_later(accept_handler handler,
     net_->schedule_silent([handler = std::move(handler), conn = std::move(conn), ec] {
         handler(socket(conn), ec);
     });
+}
+
+void acceptor::async_accept(accept_handler handler) {
+    if (!open_) {
+        throw std::logic_error("simulnetx: async_accept on a closed acceptor");
+    }
+    if (!listening_) {
+        throw std::logic_error("simulnetx: async_accept on a non-listening acceptor");
+    }
+    if (accept_pending_) {
+        throw std::logic_error("simulnetx: an accept is already pending on this acceptor");
+    }
+    if (!completed_.empty()) {
+        socket taken = std::move(completed_.front());
+        completed_.pop_front();
+        auto conn = taken.release();
+        conn->detach_acceptor();
+        fire_accept_later(std::move(handler), std::move(conn), std::error_code{});
+        return;
+    }
+    accept_handler_ = std::move(handler);
+    accept_pending_ = true;
 }
 
 }  // namespace simulnetx::tcp
