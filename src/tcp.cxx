@@ -13,6 +13,21 @@ std::string to_string(const endpoint& ep) {
 
 namespace detail {
 
+namespace {
+
+// The last sequence number a segment covers: its payload bytes, plus
+// one for a SYN or FIN flag (each consumes one sequence number).
+std::uint64_t segment_end(const tcp_pending_segment& seg) {
+    std::uint64_t end = seg.seq + seg.payload.size();
+    if ((seg.flags & (tcp_flag_syn | tcp_flag_fin)) != 0) {
+        end += 1;
+    }
+    return end;
+}
+
+}  // namespace
+
+
 
 
 void tcp_connection::bind(std::uint16_t port) {
@@ -203,9 +218,9 @@ void tcp_connection::close() {
 void tcp_connection::on_segment(node_id from, std::uint16_t src_port,
                                 std::uint32_t flags, std::uint64_t seq,
                                 std::uint64_t ack, std::vector<std::byte> payload) {
-    // Handshake-only dispatch (v0.7.0 commit 1): the stream (data/ACK/
-    // FIN in ESTABLISHED) lands with the write/read commit. Until then
-    // a segment for an established connection is dropped.
+    // The 4-tuple registry guarantees this segment is for us; the
+    // check below just documents the invariant (a mismatch is dropped,
+    // never misrouted).
     if (from != peer_.node || src_port != peer_.port) {
         return;
     }
@@ -216,8 +231,10 @@ void tcp_connection::on_segment(node_id from, std::uint16_t src_port,
     }
     const bool is_syn = (flags & tcp_flag_syn) != 0;
     const bool is_ack = (flags & tcp_flag_ack) != 0;
+    const bool is_fin = (flags & tcp_flag_fin) != 0;
+
     if (state_ == state::closed) {
-        return;
+        return;  // Not registered in this state; defensive only.
     }
     if (state_ == state::syn_sent) {
         handle_syn_sent(is_syn, is_ack, seq, ack, std::move(payload));
@@ -227,7 +244,55 @@ void tcp_connection::on_segment(node_id from, std::uint16_t src_port,
         handle_syn_rcvd(is_syn, is_ack, seq, ack, std::move(payload));
         return;
     }
-    // Established and closing states: no stream yet, drop the segment.
+    // Established and closing states: data, ACK, FIN.
+    bool ack_needed = false;
+    // The FIN's seq is the seq after the data in this segment.
+    const std::uint64_t fin_seq = seq + payload.size();
+    if (!payload.empty()) {
+        if (absorb(seq, std::move(payload))) {
+            ack_needed = true;
+            if (fin_queued_ && fin_queued_seq_ == recv_next_) {
+                fin_queued_ = false;
+                if (!process_fin()) {
+                    return;  // Fully closed (FIN_WAIT_2 + peer FIN).
+                }
+                ack_needed = true;
+            }
+        }
+    }
+    if (is_ack) {
+        advance_window(ack);
+        if (state_ == state::closed) {
+            return;  // finish_close() unregistered us (LAST_ACK/CLOSING).
+        }
+    }
+    if (is_fin) {
+        if (fin_seq == recv_next_) {
+            if (!process_fin()) {
+                return;  // Fully closed (FIN_WAIT_2 + peer FIN).
+            }
+            ack_needed = true;
+        } else if (fin_seq > recv_next_) {
+            // Out of order: wait for the missing bytes. No ACK yet -
+            // the peer retransmits the FIN on its RTO.
+            fin_queued_ = true;
+            fin_queued_seq_ = fin_seq;
+        } else {
+            // Retransmitted FIN: re-ACK it.
+            ack_needed = true;
+        }
+    }
+    if (is_syn) {
+        // A retransmitted SYN+ACK (our ACK was lost): re-ACK it so the
+        // peer can complete the handshake. Without this the peer's
+        // half-open connection would retransmit until it times out,
+        // even though we are already established.
+        ack_needed = true;
+    }
+    if (ack_needed && state_ != state::closed) {
+        send_best_effort(tcp_flag_ack, send_next_, recv_next_, {});
+    }
+    maybe_complete_read();
 }
 
 void tcp_connection::on_node_crashed() {
@@ -258,7 +323,7 @@ void tcp_connection::resend_syn_ack() {
 
 void tcp_connection::handle_syn_sent(bool is_syn, bool is_ack, std::uint64_t seq,
                                      std::uint64_t ack,
-                                     std::vector<std::byte>) {
+                                     std::vector<std::byte> payload) {
     if (is_syn && is_ack) {
         if (ack != send_next_) {
             return;  // Not our SYN being acked: stray.
@@ -269,13 +334,20 @@ void tcp_connection::handle_syn_sent(bool is_syn, bool is_ack, std::uint64_t seq
         }
         state_ = state::established;
         connected_ = true;
+        if (!payload.empty()) {
+            // Data riding the SYN+ACK (rare, legal): absorb it at the
+            // seq after the peer's SYN.
+            absorb(seq + 1, std::move(payload));
+        }
         send_ack();
         complete_connect(std::error_code{});
         return;
     }
     if (is_syn) {
         // Simultaneous open: the peer also sent a SYN. Answer with
-        // SYN+ACK and wait for their ACK like a server would.
+        // SYN+ACK and wait for their ACK like a server would. The
+        // unacked SYN entry's flags become SYN+ACK, so a retransmit
+        // re-sends the right segment.
         recv_next_ = seq + 1;
         if (!unacked_.empty() && unacked_.front().seq == 0) {
             unacked_.front().flags = tcp_flag_syn | tcp_flag_ack;
@@ -287,9 +359,9 @@ void tcp_connection::handle_syn_sent(bool is_syn, bool is_ack, std::uint64_t seq
     // A bare ACK or anything else in SYN_SENT is stray: drop it.
 }
 
-void tcp_connection::handle_syn_rcvd(bool is_syn, bool is_ack, std::uint64_t,
+void tcp_connection::handle_syn_rcvd(bool is_syn, bool is_ack, std::uint64_t seq,
                                      std::uint64_t ack,
-                                     std::vector<std::byte>) {
+                                     std::vector<std::byte> payload) {
     if (is_ack && !is_syn) {
         if (ack != send_next_) {
             return;  // Not our SYN being acked: stray.
@@ -299,19 +371,26 @@ void tcp_connection::handle_syn_rcvd(bool is_syn, bool is_ack, std::uint64_t,
         }
         state_ = state::established;
         connected_ = true;
+        if (!payload.empty()) {
+            // Data riding the ACK (sent before ESTABLISHED): absorb it.
+            absorb(seq, std::move(payload));
+            maybe_complete_read();
+        }
         if (acceptor_ != nullptr) {
             acceptor_->complete_handshake(shared_from_this());
         } else {
+            // Simultaneous open on a client socket: no acceptor owns
+            // us, so the connect completes here.
             complete_connect(std::error_code{});
         }
         return;
     }
     if (is_syn && !is_ack) {
-        // Retransmitted SYN: resend our SYN+ACK.
+        // Retransmitted SYN: resend our SYN+ACK and restart the RTO.
         send_best_effort(tcp_flag_syn | tcp_flag_ack, 0, recv_next_, {});
         return;
     }
-    // Anything else: drop.
+    // Anything else (bare ACK with the wrong number, data, FIN): drop.
 }
 
 void tcp_connection::reset_with(std::error_code code) {
@@ -355,6 +434,213 @@ void tcp_connection::async_connect(endpoint peer, connect_handler handler) {
     }
 }
 
+void tcp_connection::async_write(std::span<const std::byte> data,
+                                 write_handler handler) {
+    if (!open_) {
+        throw std::logic_error("simulnetx: async_write on a closed socket");
+    }
+    if (state_ != state::established && state_ != state::close_wait) {
+        throw std::logic_error("simulnetx: async_write on an unconnected socket");
+    }
+    if (data.empty()) {
+        // Legal, sends nothing: complete via a zero-delay event, never
+        // synchronously.
+        fire_later([handler = std::move(handler)] { handler(std::error_code{}, 0); });
+        return;
+    }
+    // Queue the write before sending: the segments are numbered from
+    // send_next_ in order, so the op's end_seq is known up front. If a
+    // send throws (unreachable in practice: every segment takes the
+    // same link), the op stays queued and its bytes complete on ACK or
+    // on teardown, so no write is silently lost.
+    tcp_write_op op;
+    op.end_seq = send_next_ + data.size();
+    op.total = data.size();
+    op.handler = std::move(handler);
+    writes_.push_back(std::move(op));
+    std::size_t offset = 0;
+    while (offset < data.size()) {
+        const std::size_t chunk = std::min(tcp_mss, data.size() - offset);
+        const auto begin = data.begin() + static_cast<std::ptrdiff_t>(offset);
+        std::vector<std::byte> payload(begin, begin + static_cast<std::ptrdiff_t>(chunk));
+        const std::uint64_t seq = send_next_;
+        send_raw(tcp_flag_ack, seq, recv_next_, payload);
+        unacked_.push_back(tcp_pending_segment{seq, tcp_flag_ack, std::move(payload)});
+        send_next_ += chunk;
+        offset += chunk;
+    }
+}
+
+void tcp_connection::async_read_some(std::span<std::byte> buffer,
+                                     read_handler handler) {
+    // The peer already sent its FIN and the connection fully closed
+    // before this read was armed (the handler that arms it runs via a
+    // deferred event, so the FIN can land first): report EOF at once.
+    if (state_ == state::closed && peer_eof_) {
+        fire_later([handler = std::move(handler)] { handler(std::error_code{}, 0); });
+        return;
+    }
+    // No open_ check here: after close() the socket is still readable
+    // (half-close: FIN_WAIT_1/2/CLOSING). The state check below rejects
+    // reads on a never-connected or fully-closed socket.
+    if (state_ != state::established && state_ != state::close_wait &&
+        state_ != state::fin_wait_1 && state_ != state::fin_wait_2 &&
+        state_ != state::closing) {
+        throw std::logic_error("simulnetx: async_read_some on an unconnected socket");
+    }
+    if (read_pending_) {
+        throw std::logic_error("simulnetx: a read is already pending on this socket");
+    }
+    read_buffer_ = buffer;
+    read_handler_ = std::move(handler);
+    read_pending_ = true;
+    maybe_complete_read();
+}
+
+bool tcp_connection::absorb(std::uint64_t seq, std::vector<std::byte> payload) {
+    if (payload.empty()) {
+        return false;
+    }
+    if (seq + payload.size() <= recv_next_) {
+        return false;  // Fully duplicate: already received.
+    }
+    if (seq < recv_next_) {
+        // Partial overlap: trim the already-received prefix.
+        const std::size_t trim = static_cast<std::size_t>(recv_next_ - seq);
+        payload.erase(payload.begin(),
+                      payload.begin() + static_cast<std::ptrdiff_t>(trim));
+        seq = recv_next_;
+    }
+    if (seq > recv_next_) {
+        // Out of order: buffer for reassembly (no ACK yet - the peer
+        // retransmits the missing bytes on its RTO).
+        reassembly_[seq] = std::move(payload);
+        return false;
+    }
+    recv_ready_.insert(recv_ready_.end(), payload.begin(), payload.end());
+    recv_next_ += payload.size();
+    drain_reassembly();
+    return true;
+}
+
+void tcp_connection::drain_reassembly() {
+    while (true) {
+        // Find a buffered segment overlapping recv_next_: the one
+        // starting at or before it with the smallest seq.
+        auto it = reassembly_.lower_bound(recv_next_);
+        if (it != reassembly_.begin()) {
+            auto prev = std::prev(it);
+            if (prev->first + prev->second.size() > recv_next_) {
+                it = prev;  // overlaps from below
+            } else {
+                // Fully duplicate: drop it and keep draining.
+                reassembly_.erase(prev);
+                continue;
+            }
+        }
+        if (it == reassembly_.end() || it->first > recv_next_) {
+            return;
+        }
+        std::uint64_t seg_seq = it->first;
+        std::vector<std::byte> seg = std::move(it->second);
+        reassembly_.erase(it);
+        if (seg_seq < recv_next_) {
+            const std::size_t trim = static_cast<std::size_t>(recv_next_ - seg_seq);
+            if (trim >= seg.size()) {
+                continue;  // fully duplicate
+            }
+            seg.erase(seg.begin(), seg.begin() + static_cast<std::ptrdiff_t>(trim));
+            seg_seq = recv_next_;
+        }
+        recv_ready_.insert(recv_ready_.end(), seg.begin(), seg.end());
+        recv_next_ += seg.size();
+    }
+}
+
+void tcp_connection::advance_window(std::uint64_t ack) {
+    if (ack <= send_acked_ || ack > send_next_) {
+        return;  // Stale, duplicate, or beyond what was sent: ignore.
+    }
+    send_acked_ = ack;
+    while (!unacked_.empty() && segment_end(unacked_.front()) <= ack) {
+        unacked_.pop_front();
+    }
+    complete_writes_up_to(ack);
+    // Our FIN is acked when the cumulative ACK passes its seq.
+    if (state_ == state::fin_wait_1 && ack > fin_seq_) {
+        state_ = state::fin_wait_2;
+    } else if (state_ == state::last_ack && ack > fin_seq_) {
+        finish_close();
+        return;
+    } else if (state_ == state::closing && ack > fin_seq_) {
+        finish_close();
+        return;
+    }
+}
+
+bool tcp_connection::process_fin() {
+    recv_next_ += 1;
+    peer_eof_ = true;
+    switch (state_) {
+        case state::established:
+            state_ = state::close_wait;
+            return true;
+        case state::fin_wait_1:
+            state_ = state::closing;
+            return true;
+        case state::fin_wait_2:
+            // ACK the FIN before unregistering: the peer is done.
+            send_best_effort(tcp_flag_ack, send_next_, recv_next_, {});
+            finish_close();
+            return false;
+        default:
+            // close_wait, last_ack, closing: already seen this FIN.
+            return true;
+    }
+}
+
+void tcp_connection::maybe_complete_read() {
+    if (!read_pending_) {
+        return;
+    }
+    if (!recv_ready_.empty()) {
+        const std::size_t n = std::min(read_buffer_.size(), recv_ready_.size());
+        if (n > 0) {
+            std::copy_n(recv_ready_.begin(), n, read_buffer_.begin());
+            recv_ready_.erase(recv_ready_.begin(),
+                              recv_ready_.begin() + static_cast<std::ptrdiff_t>(n));
+        }
+        read_pending_ = false;
+        read_handler handler = std::move(read_handler_);
+        read_handler_ = nullptr;
+        read_buffer_ = {};
+        fire_later([handler = std::move(handler), n] { handler(std::error_code{}, n); });
+        return;
+    }
+    if (peer_eof_) {
+        read_pending_ = false;
+        read_handler handler = std::move(read_handler_);
+        read_handler_ = nullptr;
+        read_buffer_ = {};
+        fire_later([handler = std::move(handler)] { handler(std::error_code{}, 0); });
+    }
+}
+
+void tcp_connection::complete_writes_up_to(std::uint64_t acked) {
+    while (!writes_.empty() && writes_.front().end_seq <= acked) {
+        tcp_write_op op = std::move(writes_.front());
+        writes_.pop_front();
+        fire_later([handler = std::move(op.handler), total = op.total] {
+            handler(std::error_code{}, total);
+        });
+    }
+}
+
+void tcp_connection::finish_close() {
+    unregister_connection();
+    state_ = state::closed;
+}
+
 }  // namespace detail
 
 
@@ -387,6 +673,23 @@ void socket::close() {
 
 void socket::async_connect(endpoint peer, connect_handler handler) {
     target().async_connect(peer, std::move(handler));
+}
+
+void socket::async_write(std::span<const std::byte> data, write_handler handler) {
+    target().async_write(data, std::move(handler));
+}
+
+void socket::async_write(std::string_view data, write_handler handler) {
+    std::vector<std::byte> bytes;
+    bytes.reserve(data.size());
+    for (const char c : data) {
+        bytes.push_back(static_cast<std::byte>(c));
+    }
+    async_write(std::span<const std::byte>(bytes), std::move(handler));
+}
+
+void socket::async_read_some(std::span<std::byte> buffer, read_handler handler) {
+    target().async_read_some(buffer, std::move(handler));
 }
 
 acceptor::acceptor(network& net, node& node) : net_(&net), node_(&node) {}
