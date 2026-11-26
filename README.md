@@ -81,8 +81,10 @@ docs/scenario.md.
 - **Tracing** - an event trace of every run: what was sent, delivered,
   dropped and why. See docs/tracing.md.
 - **Socket shim (UDP)** - async Asio-style `udp::socket` on top of the
-  sim. See docs/socket-udp.md. A TCP-like reliable stream is the next
-  version.
+  sim. See docs/socket-udp.md.
+- **Socket shim (TCP)** - a TCP-like reliable stream: `tcp::socket` +
+  `tcp::acceptor`, 3-way handshake, retransmission, FIN close.
+  See docs/socket-tcp.md.
 
 ## License
 
