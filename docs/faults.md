@@ -28,6 +28,13 @@ ack) under 30% loss with a partition in the middle of the run, written against
 `network` directly. `examples/scenario_retry.cxx` is the same protocol written
 with the scenario builder; both produce identical output.
 
+## Bandwidth
+
+`link_config::bandwidth_bps` caps a link at that many bytes per
+second (0 = unlimited). See `docs/bandwidth.md`: a message of N bytes
+needs floor(N * 8 * 1e9 / bandwidth_bps) ns on the wire, messages queue
+FIFO per directed link, and delivery is finish + latency.
+
 ## Crash and restart
 
 A crashed node drops incoming messages, cannot send or schedule timers, and

@@ -44,6 +44,7 @@ if(SIMULNETX_BUILD_TESTS)
         tests/determinism_test.cxx
         tests/directed_test.cxx
         tests/expectation_test.cxx
+        tests/bandwidth_test.cxx
         tests/golden_test.cxx
         tests/json_test.cxx
         tests/network_test.cxx

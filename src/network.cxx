@@ -1,5 +1,7 @@
 #include "simulnetx/network.hxx"
 
+#include <algorithm>
+#include <limits>
 #include <sstream>
 #include <stdexcept>
 #include <utility>
@@ -23,6 +25,69 @@ void validate_config(const link_config& cfg) {
             throw std::invalid_argument("simulnetx: link rates must be in [0, 1]");
         }
     }
+}
+
+// Add two nanosecond durations, throwing instead of overflowing: virtual
+// times near int64 max (292 years) are absurd, but a wrap would silently
+// deliver a message in the past, so the arithmetic is checked wherever a
+// bandwidth finish time can push a sum toward the limit.
+std::chrono::nanoseconds checked_add(std::chrono::nanoseconds a, std::chrono::nanoseconds b) {
+    if (b.count() > 0 &&
+        a.count() > std::numeric_limits<std::int64_t>::max() - b.count()) {
+        throw std::invalid_argument(
+            "simulnetx: virtual time overflows int64 nanoseconds");
+    }
+    return a + b;
+}
+
+// floor(bytes * 8 * 1e9 / bps) nanoseconds of serialization delay: how
+// long the link is busy transmitting a message of this size.
+// Division-first, so the product bytes * 8 * 1e9 is never formed whole
+// (it overflows u64 past ~2.3 GB payloads, and there is no __int128 on
+// MSVC):
+//   D = (bytes / bps) * 8e9 + ((bytes % bps) * 8e9) / bps
+// and the remainder term splits 8e9 = 8 * 1e9, then 1e9 = 1e3 * 1e6, so
+// every intermediate multiply stays in u64 for bandwidths up to ~1.8e13
+// Bps (18 TB/s); past that, or past int64 nanoseconds of delay, the
+// guards below throw rather than overflowing silently.
+std::chrono::nanoseconds serialization_delay(std::size_t bytes, std::uint64_t bps) {
+    const std::uint64_t count = static_cast<std::uint64_t>(bytes);
+    const std::uint64_t whole = count / bps;
+    const std::uint64_t rem = count % bps;
+    // Whole part: whole * 8e9 must fit in int64 ns, else the delay is
+    // unrepresentable as a duration.
+    if (whole >
+        static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max()) / 8'000'000'000ULL) {
+        throw std::invalid_argument(
+            "simulnetx: serialization delay overflows int64 nanoseconds");
+    }
+    std::uint64_t delay = whole * 8'000'000'000ULL;
+    // Remainder: floor(rem * 8e9 / bps). rem < bps and rem <= bytes, a
+    // real payload size, so rem * 8 cannot overflow.
+    const std::uint64_t rem8 = rem * 8;
+    delay += (rem8 / bps) * 1'000'000'000ULL;
+    const std::uint64_t x = rem8 % bps;  // < bps
+    // floor(x * 1e9 / bps), split 1e9 = 1e3 * 1e6. x * 1e3 is guarded:
+    // it overflows only past ~1.8e16 Bps.
+    if (x > std::numeric_limits<std::uint64_t>::max() / 1'000ULL) {
+        throw std::invalid_argument("simulnetx: serialization delay overflows for "
+                                    "bandwidths above ~1.8e16 Bps");
+    }
+    const std::uint64_t y = x * 1'000ULL;
+    delay += (y / bps) * 1'000'000ULL;
+    const std::uint64_t z = y % bps;  // < bps
+    // z * 1e6: guarded the same way (overflows only past ~1.8e13 Bps
+    // with a large remainder).
+    if (z > std::numeric_limits<std::uint64_t>::max() / 1'000'000ULL) {
+        throw std::invalid_argument("simulnetx: serialization delay overflows for "
+                                    "bandwidths above ~1.8e13 Bps");
+    }
+    delay += (z * 1'000'000ULL) / bps;
+    if (delay > static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max())) {
+        throw std::invalid_argument(
+            "simulnetx: serialization delay overflows int64 nanoseconds");
+    }
+    return std::chrono::nanoseconds{static_cast<std::int64_t>(delay)};
 }
 
 }  // namespace
@@ -298,6 +363,12 @@ void network::dump_trace(std::ostream& out) const {
     }
 }
 
+std::string network::format_event(const trace_event& event) const {
+    std::ostringstream oss;
+    write_event(oss, event);
+    return oss.str();
+}
+
 std::string network::dump_trace_json() const {
     std::ostringstream oss;
     dump_trace_json(oss);
@@ -315,12 +386,6 @@ void network::dump_trace_json(std::ostream& out) const {
         {"events", json::value{std::move(events)}},
     }};
     json::dump(root, out);
-}
-
-std::string network::format_event(const trace_event& event) const {
-    std::ostringstream oss;
-    write_event(oss, event);
-    return oss.str();
 }
 
 expectation<std::size_t> network::sent_count() const {
@@ -440,7 +505,24 @@ void network::send_from(node_id from, node_id to, std::vector<std::byte> payload
                            .tag = tag});
     }
 
-    const std::chrono::nanoseconds arrival = now_ + cfg.latency + extra_delay;
+    // Bandwidth: the link is busy serializing each message in turn
+    // (strict FIFO per directed link). Unlimited (0) means no delay and
+    // no queueing. The queueing consumes no RNG, and free_at advances at
+    // send time: a message dropped later by the delivery check (a
+    // partition landing mid-transmission, a crash) still consumed its
+    // transmission. A duplicated copy is a second transmission: it
+    // consumes bandwidth and queues behind the original, and still
+    // arrives 1ns after the first.
+    std::chrono::nanoseconds finish = now_;
+    std::chrono::nanoseconds copy_finish = now_;
+    if (cfg.bandwidth_bps > 0) {
+        finish = transmit_at(from, to, bytes, cfg.bandwidth_bps);
+        if (duplicate) {
+            copy_finish = transmit_at(from, to, bytes, cfg.bandwidth_bps);
+        }
+    }
+    const std::chrono::nanoseconds arrival =
+        checked_add(checked_add(finish, cfg.latency), extra_delay);
     message msg{from, to, std::move(payload)};
     msg.tag = tag;
     if (duplicate) {
@@ -448,10 +530,22 @@ void network::send_from(node_id from, node_id to, std::vector<std::byte> payload
         // (Built before msg moves into the delivery lambda below.)
         message copy{from, to, msg.payload};
         copy.tag = tag;
-        schedule(arrival + std::chrono::nanoseconds{1},
-                 [this, copy = std::move(copy)] { deliver(copy); });
+        const std::chrono::nanoseconds copy_arrival =
+            checked_add(checked_add(checked_add(copy_finish, cfg.latency), extra_delay),
+                        std::chrono::nanoseconds{1});
+        schedule(copy_arrival, [this, copy = std::move(copy)] { deliver(copy); });
     }
     schedule(arrival, [this, msg = std::move(msg)] { deliver(msg); });
+}
+
+std::chrono::nanoseconds network::transmit_at(node_id from, node_id to, std::size_t bytes,
+                                              std::uint64_t bandwidth_bps) {
+    std::chrono::nanoseconds& free_at = link_free_at_[{from, to}];
+    const std::chrono::nanoseconds start = std::max(now_, free_at);
+    const std::chrono::nanoseconds finish =
+        checked_add(start, serialization_delay(bytes, bandwidth_bps));
+    free_at = finish;
+    return finish;
 }
 
 timer_id network::schedule_node_timer(node_id owner, std::chrono::nanoseconds delay,

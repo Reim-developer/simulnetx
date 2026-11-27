@@ -332,6 +332,13 @@ private:
     // user-scheduled timer. Throws std::invalid_argument if t is before
     // the current virtual time.
     void schedule_silent_at(std::chrono::nanoseconds t, std::function<void()> action);
+    // Transmission queueing (bandwidth): start the transmission of a
+    // message of this size on the directed link now, or when the link
+    // frees up, whichever is later. Returns the finish time and advances
+    // the link's free_at to it. Throws std::invalid_argument if the
+    // serialization delay or the finish time overflows int64 nanoseconds.
+    std::chrono::nanoseconds transmit_at(node_id from, node_id to, std::size_t bytes,
+                                         std::uint64_t bandwidth_bps);
     void deliver(const message& msg);
 
     bool partitioned_between(node_id a, node_id b) const;
@@ -347,6 +354,14 @@ private:
 
     std::vector<std::unique_ptr<node>> nodes_;
     std::map<std::pair<node_id, node_id>, link_config> links_;
+    // Per-directed-link transmission queue (bandwidth): the virtual time
+    // when the link becomes free to start the next transmission. A link
+    // entry starts at the epoch; replacing a link's config does NOT
+    // reset its free_at - the queue is link state, not config state, and
+    // it survives crash/restart (it is not node state) and partition
+    // (a transmission that happened still happened, even if its message
+    // is later dropped by the delivery check).
+    std::map<std::pair<node_id, node_id>, std::chrono::nanoseconds> link_free_at_;
     std::unordered_set<node_id> partition_a_;
     std::unordered_set<node_id> partition_b_;
 
