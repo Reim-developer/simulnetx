@@ -85,6 +85,10 @@ docs/scenario.md.
 - **Socket shim (TCP)** - a TCP-like reliable stream: `tcp::socket` +
   `tcp::acceptor`, 3-way handshake, retransmission, FIN close.
   See docs/socket-tcp.md.
+- **Bandwidth** - capacity-limited links: messages queue FIFO on the
+  wire, delivery is finish + latency. Trace export as JSON, and
+  opt-in stable type names for cross-compiler tags.
+  See docs/bandwidth.md and docs/tracing.md.
 
 ## License
 

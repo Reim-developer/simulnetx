@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(simulnetx VERSION 0.7.0 LANGUAGES CXX)
+project(simulnetx VERSION 0.8.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -138,6 +138,15 @@ if(SIMULNETX_BUILD_EXAMPLES)
         target_compile_options(tcp_echo PRIVATE /W4 /WX)
     else()
         target_compile_options(tcp_echo PRIVATE -Wall -Wextra -Werror)
+    endif()
+
+    add_executable(bandwidth_slow_link examples/bandwidth_slow_link.cxx)
+    target_link_libraries(bandwidth_slow_link PRIVATE simulnetx)
+
+    if(MSVC)
+        target_compile_options(bandwidth_slow_link PRIVATE /W4 /WX)
+    else()
+        target_compile_options(bandwidth_slow_link PRIVATE -Wall -Wextra -Werror)
     endif()
 endif()
 
