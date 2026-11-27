@@ -3,7 +3,9 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <tuple>
+#include <typeinfo>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -69,6 +71,21 @@ struct tree_node {
 
 enum class color : std::uint8_t { red, green, blue };
 
+// Types for the type_name tests: two share the specialized name "ping",
+// one keeps the default (mangled typeid name).
+struct named_ping {
+    int seq{};
+    bool operator==(const named_ping&) const = default;
+};
+struct named_ping_twin {
+    int seq{};
+    bool operator==(const named_ping_twin&) const = default;
+};
+struct unnamed_plain {
+    int x{};
+    bool operator==(const unnamed_plain&) const = default;
+};
+
 // Not an aggregate (user ctor) and not trivially copyable (std::string
 // member): nothing can serialize it without a specialization.
 struct bad {
@@ -102,6 +119,17 @@ struct serializer<money> {
     static money decode(detail::cursor& in) {
         return money(std::stol(serializer<std::string>::decode(in)));
     }
+};
+
+// Stable names for the type_name tests (see below): both named types
+// specialize to the same literal, so they share one tag by design.
+template <>
+struct type_name<named_ping> {
+    static constexpr std::string_view value = "ping";
+};
+template <>
+struct type_name<named_ping_twin> {
+    static constexpr std::string_view value = "ping";
 };
 
 }  // namespace simulnetx
@@ -265,6 +293,29 @@ TEST(SerializerTest, TypeTagStableWithinBuildAndDistinct) {
     EXPECT_NE(simulnetx::detail::type_tag<player>(), simulnetx::detail::type_tag<plain>());
     EXPECT_EQ(simulnetx::detail::type_tag<const player>(),
               simulnetx::detail::type_tag<player>());
+}
+
+TEST(SerializerTest, TypeNameSpecializedIsPinned) {
+    // FNV-1a("ping") as a pinned numeric constant: the same tag on
+    // every compiler, because the name is a literal, not a mangled
+    // typeid name.
+    EXPECT_EQ(simulnetx::detail::type_tag<named_ping>(), 13776757609873999785ULL);
+    EXPECT_EQ(simulnetx::detail::type_tag<named_ping>(),
+              simulnetx::detail::fnv1a_64("ping"));
+}
+
+TEST(SerializerTest, TypeNameSharedNameCollidesByDesign) {
+    // Two types sharing one specialized name get the same tag: names
+    // must be unique per type (the user's responsibility).
+    EXPECT_EQ(simulnetx::detail::type_tag<named_ping>(),
+              simulnetx::detail::type_tag<named_ping_twin>());
+}
+
+TEST(SerializerTest, TypeNameDefaultKeepsTypeidName) {
+    // Default behavior unchanged: the tag is still FNV-1a of the
+    // mangled typeid name.
+    EXPECT_EQ(simulnetx::detail::type_tag<unnamed_plain>(),
+              simulnetx::detail::fnv1a_64(typeid(unnamed_plain).name()));
 }
 
 TEST(SerializerTest, TruncationThrowsDecodeError) {

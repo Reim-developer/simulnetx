@@ -46,6 +46,30 @@ template <> struct simulnetx::serializer<money> {
 };
 ```
 
+## Cross-compiler-stable tags
+
+The 8-byte tag is FNV-1a of the type's name, and by default that name
+is the mangled `typeid` name - which differs per compiler, so the same
+type gets a different tag under g++ and clang++. A typed message
+serialized by one cannot be decoded by the other, and golden traces
+carrying tags are not comparable across compilers. To fix it for a
+type, specialize `type_name` with a stable literal:
+
+```cpp
+struct ping { int seq; };
+
+template <> struct simulnetx::type_name<ping> {
+    static constexpr std::string_view value = "ping";
+};
+```
+
+The tag is then FNV-1a of `"ping"` on every compiler. Stability is
+opt-in per type: C++ provides no portable type name, so the library
+provides the hook. Names must be unique per type (like protobuf type
+URLs); two types sharing a name get the same tag by design. Types
+without a specialization keep working exactly as before, with their
+current tags within one compiler.
+
 The reflection engine is public too: `simulnetx::reflect::field_count`,
 `get`, `for_each_field` and `to_tuple` work on any aggregate up to 200
 fields. Limits: no C-array members (use `std::array`), no reference

@@ -43,6 +43,30 @@
 
 namespace simulnetx {
 
+// The stable name of a type, for its type tag (see detail::type_tag).
+// Default: the mangled typeid name, so existing code keeps its current
+// tags within one compiler. Specialize with a stable literal for
+// cross-compiler stability:
+//
+//   template <> struct simulnetx::type_name<ping> {
+//       static constexpr std::string_view value = "ping";
+//   };
+//
+// The tag is FNV-1a of this name, and the 8-byte envelope format is
+// unchanged. Stability is opt-in per type, not automatic: C++ provides
+// no portable type name, so the library provides the hook. Names must be
+// unique per type (the user's responsibility, like protobuf type URLs);
+// two types sharing a name collide by design, and the docs say so. The
+// primary is inline static const, not constexpr: typeid(T).name() is
+// not a constant expression, so only literal specializations are
+// constexpr (a non-integral static const member needs constexpr or
+// inline for an in-class initializer, and constexpr is impossible
+// here).
+template <typename T>
+struct type_name {
+    inline static const std::string_view value = typeid(T).name();
+};
+
 namespace detail {
 
 // FNV-1a 64-bit hash. The constants are the standard offset basis and
@@ -57,14 +81,15 @@ constexpr std::uint64_t fnv1a_64(std::string_view text) noexcept {
     return hash;
 }
 
-// The type tag: a 64-bit FNV-1a hash of the type's mangled name. Stable
-// within one build; NOT stable across compilers, because typeid names
-// differ - golden tests assert round-trip equality, never raw bytes.
-// Cached once per type; two distinct types collide with probability 2^-64.
+// The type tag: a 64-bit FNV-1a hash of the type's stable name (see
+// type_name above). Stable within one build for unspecialized types;
+// identical on every compiler for types that specialize type_name with
+// a literal. Cached once per type; two distinct types collide with
+// probability 2^-64 (or by design, if they share a specialized name).
 template <typename T>
 std::uint64_t type_tag() {
     static const std::uint64_t tag =
-        fnv1a_64(typeid(std::remove_cvref_t<T>).name());
+        fnv1a_64(type_name<std::remove_cvref_t<T>>::value);
     return tag;
 }
 
