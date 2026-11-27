@@ -6,6 +6,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 add_library(simulnetx
+    src/json.cxx
     src/network.cxx
     src/node.cxx
     src/rng.cxx
@@ -44,6 +45,7 @@ if(SIMULNETX_BUILD_TESTS)
         tests/directed_test.cxx
         tests/expectation_test.cxx
         tests/golden_test.cxx
+        tests/json_test.cxx
         tests/network_test.cxx
         tests/partition_test.cxx
         tests/reflect_test.cxx

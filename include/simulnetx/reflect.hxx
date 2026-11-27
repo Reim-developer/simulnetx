@@ -2,6 +2,7 @@
 
 #include <concepts>
 #include <cstddef>
+#include <cstdlib>
 #include <tuple>
 #include <type_traits>
 #include <utility>
@@ -46,9 +47,27 @@ namespace detail {
 // not bind to a non-const lvalue reference - and a reference member cannot
 // be value-initialized either. That is what the braced reference check
 // below relies on (see braced_constructible_at).
+//
+// The conversion operator is DEFINED, not just declared: clang
+// instantiates std::optional's converting constructor while evaluating
+// the braced check for a struct with an optional member, and that
+// constructor odr-uses this conversion, so a declaration-only operator
+// fails the TU with -Wundefined-inline under -Werror (found by the v0.8.0
+// JSON spike: a reflectable struct with an std::optional<int> member
+// through for_each_field). The body is std::abort(): it is never
+// executed - the probes only ever use the conversion in unevaluated
+// contexts (is_constructible, requires-expressions) - and abort is the
+// honest body for a function that must exist but must never run: it needs
+// no construction of T, so it works for types with no default constructor
+// (a `return T{};` body breaks structs with no_default members) and for
+// move-only members alike. Not constexpr: a body that always aborts can
+// never be a constant expression, and a constexpr function that can never
+// be constant-evaluated is ill-formed (no diagnostic required).
 struct any_value {
     template <typename T>
-    constexpr operator T() const noexcept;
+    operator T() const noexcept {
+        std::abort();
+    }
 };
 
 // Field count probe: direct (paren) initialization, which - unlike braced
