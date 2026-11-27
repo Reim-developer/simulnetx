@@ -1,6 +1,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <vector>
 
 #include <gtest/gtest.h>
@@ -28,15 +29,14 @@ struct outcome {
 };
 
 // One scenario exercising every sampling path plus timers and a partition.
-outcome run_scenario(std::uint64_t seed) {
-    simulnetx::network net(seed);
+// Split into setup and finish so two networks can be stepped interleaved.
+void setup_scenario(simulnetx::network& net, const std::shared_ptr<outcome>& result) {
     auto& a = net.add_node("A");
     auto& b = net.add_node("B");
     auto& c = net.add_node("C");
 
-    outcome result;
-    const auto record = [&](const simulnetx::message& m) {
-        result.log.push_back(
+    const auto record = [&net, result](const simulnetx::message& m) {
+        result->log.push_back(
             delivery{net.now().count(), m.from, m.to, static_cast<int>(m.payload[0])});
     };
     a.on_message(record);
@@ -61,12 +61,21 @@ outcome run_scenario(std::uint64_t seed) {
     // A partition in the middle, then a heal.
     b.after(300ms, [&] { net.partition({a.id()}, {b.id(), c.id()}); });
     b.after(700ms, [&] { net.heal(); });
+}
 
+void finish_scenario(simulnetx::network& net, const std::shared_ptr<outcome>& result) {
+    result->sent = net.sent_count();
+    result->delivered = net.delivered_count();
+    result->dropped = net.dropped_count();
+}
+
+outcome run_scenario(std::uint64_t seed) {
+    simulnetx::network net(seed);
+    auto result = std::make_shared<outcome>();
+    setup_scenario(net, result);
     net.run_for(2s);
-    result.sent = net.sent_count();
-    result.delivered = net.delivered_count();
-    result.dropped = net.dropped_count();
-    return result;
+    finish_scenario(net, result);
+    return *result;
 }
 
 TEST(DeterminismTest, SameSeedSameScenarioIsIdentical) {
@@ -82,6 +91,29 @@ TEST(DeterminismTest, DifferentSeedGivesDifferentOutcome) {
     const outcome a = run_scenario(99);
     const outcome b = run_scenario(100);
     EXPECT_NE(a, b);
+}
+
+// Single-thread model (docs/stability.md): no shared RNG, no shared
+// state. Two networks alive at once, same seed, stepped in turns,
+// must produce identical outcomes and identical traces - and the
+// same as a solo run.
+TEST(DeterminismTest, TwoNetworksWithSameSeedAreIndependent) {
+    simulnetx::network net1(99);
+    simulnetx::network net2(99);
+    auto result1 = std::make_shared<outcome>();
+    auto result2 = std::make_shared<outcome>();
+    setup_scenario(net1, result1);
+    setup_scenario(net2, result2);
+    for (int i = 0; i < 20; ++i) {
+        net1.run_for(100ms);
+        net2.run_for(100ms);
+    }
+    finish_scenario(net1, result1);
+    finish_scenario(net2, result2);
+    EXPECT_EQ(*result1, *result2);
+    EXPECT_EQ(*result1, run_scenario(99));
+    EXPECT_EQ(net1.dump_trace(), net2.dump_trace());
+    EXPECT_EQ(net1.dump_trace_json(), net2.dump_trace_json());
 }
 
 }  // namespace

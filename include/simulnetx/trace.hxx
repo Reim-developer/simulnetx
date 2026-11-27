@@ -42,6 +42,8 @@ enum class event_kind {
 
 enum class drop_reason { loss, partition, crashed };
 
+// The stable name of an event kind, as printed by dump_trace() and
+// dump_trace_json(). Frozen in 1.0.0.
 inline const char* event_kind_name(event_kind kind) {
     switch (kind) {
         case event_kind::sent:
@@ -74,6 +76,8 @@ inline const char* event_kind_name(event_kind kind) {
     return "unknown";
 }
 
+// The stable name of a drop reason, as printed by dump_trace() and
+// dump_trace_json(). Frozen in 1.0.0.
 inline const char* drop_reason_name(drop_reason reason) {
     switch (reason) {
         case drop_reason::loss:

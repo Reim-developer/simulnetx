@@ -42,7 +42,10 @@ public:
     node(node&&) = delete;
     node& operator=(node&&) = delete;
 
+    // The numeric id assigned at creation (0, 1, 2, ...), used as the
+    // address in link/send calls.
     node_id id() const { return id_; }
+    // The name given to add_node, used in traces and failure messages.
     const std::string& name() const { return name_; }
 
     // Set the handler invoked for each delivered message. Replaces any

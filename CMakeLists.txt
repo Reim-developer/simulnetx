@@ -40,6 +40,7 @@ if(SIMULNETX_BUILD_TESTS)
     enable_testing()
 
     add_executable(simulnetx_tests
+        tests/api_surface_test.cxx
         tests/crash_test.cxx
         tests/determinism_test.cxx
         tests/directed_test.cxx

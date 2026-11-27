@@ -83,6 +83,7 @@ public:
     // replaces the peer (Asio-faithful). Allowed on an unbound socket;
     // the first send binds an ephemeral port (see async_send_to).
     void connect(endpoint peer);
+    // True after connect(), false after close().
     bool is_connected() const { return connected_; }
 
     // Send one datagram (one sim message). The data is COPIED into the

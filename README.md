@@ -89,6 +89,8 @@ docs/scenario.md.
   wire, delivery is finish + latency. Trace export as JSON, and
   opt-in stable type names for cross-compiler tags.
   See docs/bandwidth.md and docs/tracing.md.
+- **Stability** - the 1.0.0 freeze: single-thread model, error
+  contract, frozen API surface. See docs/stability.md and docs/errors.md.
 
 ## License
 

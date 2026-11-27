@@ -45,8 +45,14 @@ std::string stringify(const T& value) {
 template <typename T>
 class expectation {
 public:
+    // Implicit conversion to the plain value, so an expectation is
+    // usable as a value: std::size_t n = net.delivered_count();
     operator T() const { return value_; }
 
+    // Each check below throws assertion_failed (with the seed and the
+    // current virtual time) when the value does not satisfy it, and
+    // returns *this so checks chain: .equal(1).greater_than(0).
+    // equal: value == expected.
     const expectation& equal(const T& expected) const {
         if (!(value_ == expected)) {
             fail("==", detail::stringify(expected));
@@ -54,6 +60,7 @@ public:
         return *this;
     }
 
+    // not_equal: value != expected.
     const expectation& not_equal(const T& expected) const {
         if (!(value_ != expected)) {
             fail("!=", detail::stringify(expected));
@@ -61,6 +68,7 @@ public:
         return *this;
     }
 
+    // greater_than: value > expected.
     const expectation& greater_than(const T& expected) const {
         if (!(value_ > expected)) {
             fail(">", detail::stringify(expected));
@@ -68,6 +76,7 @@ public:
         return *this;
     }
 
+    // less_than: value < expected.
     const expectation& less_than(const T& expected) const {
         if (!(value_ < expected)) {
             fail("<", detail::stringify(expected));
@@ -75,6 +84,7 @@ public:
         return *this;
     }
 
+    // greater_or_equal: value >= expected.
     const expectation& greater_or_equal(const T& expected) const {
         if (!(value_ >= expected)) {
             fail(">=", detail::stringify(expected));
@@ -82,6 +92,7 @@ public:
         return *this;
     }
 
+    // less_or_equal: value <= expected.
     const expectation& less_or_equal(const T& expected) const {
         if (!(value_ <= expected)) {
             fail("<=", detail::stringify(expected));
@@ -89,6 +100,7 @@ public:
         return *this;
     }
 
+    // between: lo <= value <= hi (inclusive on both ends).
     const expectation& between(const T& lo, const T& hi) const {
         if (value_ < lo || value_ > hi) {
             fail("in", "[" + detail::stringify(lo) + ", " + detail::stringify(hi) + "]");

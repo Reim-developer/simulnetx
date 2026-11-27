@@ -61,6 +61,8 @@ public:
     scenario(scenario&&) = delete;
     scenario& operator=(scenario&&) = delete;
 
+    // The scenario name, prefixed to every failure message from its
+    // expectations (so a failing scenario names itself).
     const std::string& name() const { return name_; }
 
     // Set the seed for the run. Must be called before the network is created
