@@ -233,13 +233,26 @@ void network::run_until(std::chrono::nanoseconds t) {
     if (t < now_) {
         throw std::invalid_argument("simulnetx: run_until target is before the current virtual time");
     }
-    while (!events_.empty() && events_.top().time <= t) {
-        const scheduled_event event = events_.top();
-        events_.pop();
-        now_ = event.time;
-        event.action();
+    if (running_) {
+        throw std::logic_error("simulnetx: run_until called reentrantly from a handler; "
+                               "the outer run_until owns the clock");
     }
-    now_ = t;
+    running_ = true;
+    try {
+        while (!events_.empty() && events_.top().time <= t) {
+            const scheduled_event event = events_.top();
+            events_.pop();
+            now_ = event.time;
+            event.action();
+        }
+        now_ = t;
+    } catch (...) {
+        // A handler threw (e.g. unhandled_message): the network stays
+        // usable, so the guard must reset before the throw propagates.
+        running_ = false;
+        throw;
+    }
+    running_ = false;
 }
 
 void network::run_for(std::chrono::nanoseconds d) {

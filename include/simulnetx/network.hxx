@@ -107,7 +107,11 @@ public:
 
     // Advance the virtual clock to t, processing all events scheduled at or
     // before t in (time, sequence) order. Throws std::invalid_argument if t
-    // is before the current virtual time.
+    // is before the current virtual time. Reentrant calls throw
+    // std::logic_error: a handler running inside run_until may send, schedule
+    // timers and arm receives, but it may not call run_until (or run_for)
+    // again - the outer run already owns the clock. The guard resets even
+    // when a handler throws out of run_until, so the network stays usable.
     void run_until(std::chrono::nanoseconds t);
 
     // Advance the virtual clock by d. Throws std::invalid_argument for a
@@ -351,6 +355,11 @@ private:
     splitmix64 rng_;
     std::chrono::nanoseconds now_{0};
     std::uint64_t next_seq_{0};
+
+    // True while run_until is draining the event queue. A handler that
+    // calls run_until (or run_for) again sees this and throws
+    // std::logic_error instead of recursing into the clock.
+    bool running_{false};
 
     std::vector<std::unique_ptr<node>> nodes_;
     std::map<std::pair<node_id, node_id>, link_config> links_;

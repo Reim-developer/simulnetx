@@ -16,10 +16,12 @@ public:
 // Thrown when decoding a typed message fails: tag mismatch, truncation, or
 // malformed data (bad optional flag, variant index out of range, trailing
 // bytes). Loud, never garbage: a decode either reproduces the sent value
-// exactly or throws.
-class decode_error : public std::runtime_error {
+// exactly or throws. Derives from std::invalid_argument, not
+// std::runtime_error: a failed decode means the input bytes were bad
+// arguments to the decoder (see docs/errors.md).
+class decode_error : public std::invalid_argument {
 public:
-    explicit decode_error(const std::string& message) : std::runtime_error(message) {}
+    explicit decode_error(const std::string& message) : std::invalid_argument(message) {}
 };
 
 // Thrown (in strict tag mode, the default) when a message reaches a node

@@ -43,6 +43,7 @@ if(SIMULNETX_BUILD_TESTS)
         tests/crash_test.cxx
         tests/determinism_test.cxx
         tests/directed_test.cxx
+        tests/errors_test.cxx
         tests/expectation_test.cxx
         tests/bandwidth_test.cxx
         tests/golden_test.cxx
