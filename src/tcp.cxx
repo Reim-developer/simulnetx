@@ -469,6 +469,28 @@ void tcp_connection::disarm_rto() {
     rto_armed_ = false;
 }
 
+void tcp_connection::arm_fin_wait_2_timeout() {
+    ++fin_wait_2_generation_;
+    const std::uint64_t generation = fin_wait_2_generation_;
+    std::weak_ptr<tcp_connection> weak = shared_from_this();
+    net_->schedule_silent_at(net_->now() + tcp_fin_wait_2_timeout, [weak, generation] {
+        if (const auto self = weak.lock()) {
+            self->on_fin_wait_2_timeout(generation);
+        }
+    });
+}
+
+void tcp_connection::disarm_fin_wait_2_timeout() {
+    ++fin_wait_2_generation_;
+}
+
+void tcp_connection::on_fin_wait_2_timeout(std::uint64_t generation) {
+    if (generation != fin_wait_2_generation_ || state_ != state::fin_wait_2) {
+        return;  // Stale timer (disarmed, or the peer's FIN already closed us).
+    }
+    finish_close();
+}
+
 void tcp_connection::send_raw(std::uint32_t flags, std::uint64_t seq,
                               std::uint64_t ack, std::vector<std::byte> payload) {
     node_->send_segment(peer_.node, port_, peer_.port, flags, seq, ack,
@@ -527,6 +549,7 @@ void tcp_connection::release_port() {
 
 void tcp_connection::finish_close() {
     disarm_rto();
+    disarm_fin_wait_2_timeout();
     unregister_connection();
     state_ = state::closed;
 }
@@ -707,6 +730,7 @@ void tcp_connection::advance_window(std::uint64_t ack) {
     // Our FIN is acked when the cumulative ACK passes its seq.
     if (state_ == state::fin_wait_1 && ack > fin_seq_) {
         state_ = state::fin_wait_2;
+        arm_fin_wait_2_timeout();
     } else if (state_ == state::last_ack && ack > fin_seq_) {
         finish_close();
         return;

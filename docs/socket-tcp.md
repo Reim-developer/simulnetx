@@ -37,10 +37,15 @@ accept may be pending; writes may queue and complete in order. A
 write copies its data; a read buffer is caller-owned. `close()`
 sends a FIN after the queued writes; the peer's FIN makes the next
 read complete with `(success, 0)` - EOF, not an error. A read stays
-legal after `close()` (half-close). A crash cancels the crashed
+legal after `close()` (half-close). The port is rebound immediately
+after close (no TIME_WAIT), but the 4-tuple stays registered while
+the connection is in FIN_WAIT_2: a new connect from the same port to
+the same peer throws `logic_error` until the peer sends its FIN or
+the 60s FIN_WAIT_2 timeout frees it (after the timeout the connect
+registers, then times out - the peer's side still owns its half of
+the 4-tuple, exactly as in real TCP). A crash cancels the crashed
 node's sockets' pending ops, but the binding survives the restart;
-the peer learns via RST after the restart (`connection_reset`). The
-port is rebound immediately after close (no TIME_WAIT). See
+the peer learns via RST after the restart (`connection_reset`). See
 `examples/tcp_echo.cxx`: 7 segments, 14 trace events, reply at
 t=80ms at 20ms latency.
 

@@ -88,6 +88,13 @@ inline constexpr std::chrono::nanoseconds tcp_rto_initial{200000000};
 // Max retransmits of one segment before the connection is torn down.
 inline constexpr int tcp_max_retransmits = 5;
 
+// FIN_WAIT_2 timeout: a socket in FIN_WAIT_2 whose peer never sends FIN
+// is unregistered after this long (sim-scoped, documented as arbitrary;
+// 60s is long enough that no realistic test trips on it accidentally,
+// and short enough that a half-open connection is not a permanent
+// leak). Firing is a silent timer, so it cannot throw out of run_until.
+inline constexpr std::chrono::nanoseconds tcp_fin_wait_2_timeout{60000000000};
+
 // One unacknowledged segment, kept for retransmission. The ACK field is
 // NOT stored: a retransmit re-acks with the current receive position.
 // flags holds the SYN/FIN bits as sent; the ACK bit is set on every
@@ -120,7 +127,8 @@ struct tcp_connection : std::enable_shared_from_this<tcp_connection> {
         syn_rcvd,    // passive open: SYN received, SYN+ACK sent
         established,
         fin_wait_1,  // our FIN sent, awaiting its ACK
-        fin_wait_2,  // our FIN acked, awaiting the peer's FIN
+        fin_wait_2,  // our FIN acked, awaiting the peer's FIN (a 60s
+                      // silent timer frees the 4-tuple if it never comes)
         close_wait,  // peer's FIN received, we have not closed yet
         last_ack,    // our FIN sent after the peer's FIN, awaiting its ACK
         closing,     // simultaneous close: both FINs sent, awaiting ACK
@@ -183,6 +191,11 @@ private:
     void complete_writes_with(std::error_code code);
     void arm_rto(std::chrono::nanoseconds delay);
     void disarm_rto();
+    // FIN_WAIT_2 timeout machinery: arm on entering FIN_WAIT_2, disarm
+    // on finish_close; the generation discards stale firings.
+    void arm_fin_wait_2_timeout();
+    void disarm_fin_wait_2_timeout();
+    void on_fin_wait_2_timeout(std::uint64_t generation);
     // Send one segment now (throws on no link / unknown node / crashed
     // sender, like node::send). Only user-initiated sends use this
     // directly; protocol machinery goes through send_best_effort.
@@ -262,6 +275,9 @@ private:
     int rto_retries_ = 0;
     std::chrono::nanoseconds rto_delay_ = tcp_rto_initial;
     bool rto_armed_ = false;
+    // Generation for the FIN_WAIT_2 timeout: arm/disarm bump it, so a
+    // firing from an earlier arming is stale and ignored.
+    std::uint64_t fin_wait_2_generation_ = 0;
 };
 
 }  // namespace detail

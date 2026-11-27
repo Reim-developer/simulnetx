@@ -643,6 +643,50 @@ TEST(TcpTest, RebindAfterClose) {
     EXPECT_FALSE(accept_ec);
 }
 
+// FIN_WAIT_2 timeout (v1.0.0): the client closes, the server ACKs the
+// FIN but never sends its own FIN, so the client sits in FIN_WAIT_2.
+// The port rebinds at once (close() released the claim), but the
+// 4-tuple is still registered: a second connect from the same port
+// throws logic_error (pinned in ErrorsTest.DuplicateFourTupleThrows).
+// After 60s the silent timer frees the 4-tuple, so a third connect
+// from the same port registers without throwing. The connect then
+// times out: the server's side is still in CLOSE_WAIT and still owns
+// its half of the 4-tuple, so the SYN is answered with bare ACKs and
+// the handshake cannot complete. That is real-TCP behavior, not a sim
+// bug - the timeout frees YOUR side only; it cannot free the peer's.
+TEST(TcpTest, FinWait2TimeoutFreesFourTuple) {
+    TcpPair p;
+    TcpServer server(p);
+    tcp::socket accepted(p.net, p.b);
+    std::error_code accept_ec{1, std::generic_category()};
+    std::error_code connect_ec{1, std::generic_category()};
+    tcp::socket client = connect_client(p, server, accepted, accept_ec, connect_ec);
+    p.net.run_until(200ms);
+    ASSERT_FALSE(connect_ec);
+    ASSERT_FALSE(accept_ec);
+    const std::uint16_t port = client.local_endpoint().port;
+    client.close();
+    p.net.run_until(500ms);  // server ACKs the FIN: client is in FIN_WAIT_2
+
+    tcp::socket second(p.net, p.a);
+    second.bind(port);
+    EXPECT_THROW(second.async_connect(tcp::endpoint{p.b.id(), 9000},
+                                      [](std::error_code) {}),
+                 std::logic_error);
+    second.close();  // release the port claim (the failed connect did not)
+
+    p.net.run_until(61s);  // past the 60s FIN_WAIT_2 timeout
+    tcp::socket third(p.net, p.a);
+    third.bind(port);
+    std::error_code connect_ec3{1, std::generic_category()};
+    EXPECT_NO_THROW(third.async_connect(tcp::endpoint{p.b.id(), 9000},
+                                        [&connect_ec3](std::error_code ec) {
+                                            connect_ec3 = ec;
+                                        }));
+    p.net.run_until(75s);  // past the 12.6s RTO exhaustion
+    EXPECT_EQ(connect_ec3, std::make_error_code(std::errc::timed_out));
+}
+
 TEST(TcpTest, CrashMidTransfer) {
     TcpPair p;
     TcpServer server(p);
