@@ -111,6 +111,8 @@ public:
     // yet, like the network() escape hatch.
     const std::vector<trace_event>& trace();
     std::string dump_trace();
+    // The same trace as JSON (see network::dump_trace_json).
+    std::string dump_trace_json();
 
     // Run the network to virtual time t. Throws std::invalid_argument if t is
     // before the current virtual time.

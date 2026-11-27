@@ -48,6 +48,110 @@ struct JsonTestPoint {
 enum class JsonTestColor : int { red = 1, blue = 2 };
 enum class JsonTestBig : unsigned long { huge = 4000000000UL };
 
+TEST(JsonTest, DumpTraceJsonEmpty) {
+    simulnetx::network net(42);
+    net.add_node("A");
+    EXPECT_EQ(net.dump_trace_json(), "{\"seed\":42,\"events\":[]}");
+}
+
+TEST(JsonTest, DumpTraceJsonGolden) {
+    // The same tiny scenario as TraceDumpTest.GoldenTinyExample, in JSON:
+    // A -> B, 50ms latency, no loss, one send at t=0. The exact string,
+    // byte for byte, on both compilers.
+    simulnetx::network net(42);
+    auto& a = net.add_node("A");
+    auto& b = net.add_node("B");
+    net.link(a.id(), b.id(), {.latency = 50ms});
+    a.send(b.id(), "hi");
+    net.run_for(1s);
+
+    EXPECT_EQ(net.dump_trace_json(),
+              "{\"seed\":42,\"events\":["
+              "{\"at\":0,\"kind\":\"sent\",\"from\":0,\"to\":1,\"bytes\":2,\"tag\":0,"
+              "\"reason\":\"loss\",\"timer\":0,\"node\":0,\"request_id\":0,\"attempt\":0},"
+              "{\"at\":50000000,\"kind\":\"delivered\",\"from\":0,\"to\":1,\"bytes\":2,"
+              "\"tag\":0,\"reason\":\"loss\",\"timer\":0,\"node\":0,\"request_id\":0,"
+              "\"attempt\":0}]}");
+    std::ostringstream oss;
+    net.dump_trace_json(oss);
+    EXPECT_EQ(oss.str(), net.dump_trace_json());
+}
+
+// A small lossy scenario, run twice: the JSON must be identical.
+std::string run_lossy_json() {
+    simulnetx::network net(7);
+    auto& a = net.add_node("A");
+    auto& b = net.add_node("B");
+    net.link(a.id(), b.id(), {.latency = 20ms, .loss_rate = 0.3});
+    b.on_message([&](const simulnetx::message& m) {
+        if (m.payload.size() == 4) {
+            b.send(a.id(), "ack");
+        }
+    });
+    std::function<void()> retry;
+    int attempts = 0;
+    retry = [&] {
+        if (attempts >= 5) {
+            return;
+        }
+        ++attempts;
+        a.send(b.id(), "ping");
+        a.after(100ms, retry);
+    };
+    a.after(0ns, retry);
+    net.run_for(1s);
+    return net.dump_trace_json();
+}
+
+TEST(JsonTest, DumpTraceJsonDeterminism) {
+    EXPECT_EQ(run_lossy_json(), run_lossy_json());
+}
+
+TEST(JsonTest, DumpTraceJsonTransparency) {
+    // Exporting changes no counts (the v0.5.0 pattern): tracing off gives
+    // identical stats and an empty events array.
+    simulnetx::network traced(7);
+    {
+        auto& a = traced.add_node("A");
+        auto& b = traced.add_node("B");
+        traced.link(a.id(), b.id(), {.latency = 20ms, .loss_rate = 0.3});
+        a.send(b.id(), "ping");
+        traced.run_for(1s);
+    }
+    simulnetx::network untraced(7);
+    untraced.set_tracing(false);
+    {
+        auto& a = untraced.add_node("A");
+        auto& b = untraced.add_node("B");
+        untraced.link(a.id(), b.id(), {.latency = 20ms, .loss_rate = 0.3});
+        a.send(b.id(), "ping");
+        untraced.run_for(1s);
+    }
+    EXPECT_EQ(untraced.sent_count(), traced.sent_count());
+    EXPECT_EQ(untraced.delivered_count(), traced.delivered_count());
+    EXPECT_EQ(untraced.dropped_count(), traced.dropped_count());
+    EXPECT_EQ(untraced.dump_trace_json(), "{\"seed\":7,\"events\":[]}");
+    EXPECT_NE(traced.dump_trace_json(), "{\"seed\":7,\"events\":[]}");
+}
+
+TEST(JsonTest, DumpTraceJsonScenarioPassthrough) {
+    simulnetx::scenario s("json-passthrough");
+    s.seed(42).nodes("A", "B").link("A", "B", {.latency = 50ms});
+    s.send_at(0ns, "A", "B", "hi");
+    s.run_until(1s);
+    // send_at fires through a network timer, so the trace starts with
+    // its timer_fired event (node 4294967295 is no_node) before the send.
+    EXPECT_EQ(s.dump_trace_json(),
+              "{\"seed\":42,\"events\":["
+              "{\"at\":0,\"kind\":\"timer_fired\",\"from\":0,\"to\":0,\"bytes\":0,"
+              "\"tag\":0,\"reason\":\"loss\",\"timer\":0,\"node\":4294967295,"
+              "\"request_id\":0,\"attempt\":0},"
+              "{\"at\":0,\"kind\":\"sent\",\"from\":0,\"to\":1,\"bytes\":2,\"tag\":0,"
+              "\"reason\":\"loss\",\"timer\":0,\"node\":0,\"request_id\":0,\"attempt\":0},"
+              "{\"at\":50000000,\"kind\":\"delivered\",\"from\":0,\"to\":1,\"bytes\":2,"
+              "\"tag\":0,\"reason\":\"loss\",\"timer\":0,\"node\":0,\"request_id\":0,"
+              "\"attempt\":0}]}");
+}
 
 }  // namespace
 

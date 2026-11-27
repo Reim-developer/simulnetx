@@ -40,6 +40,29 @@ an identical dump string. `set_tracing(false)` stops recording,
 (`network::after`, `schedule_at`, `node::after`) that appears in their
 `timer_fired` events.
 
+## JSON export
+
+The same trace as JSON, for machines rather than eyes: `dump_trace_json()`
+returns one object, compact, on a single line:
+
+```json
+{"seed": 42, "events": [{"at": 0, "kind": "sent", "from": 0, "to": 1, "bytes": 2, "tag": 0, "reason": "loss", "timer": 0, "node": 0, "request_id": 0, "attempt": 0}, ...]}
+```
+
+Each event is an object with all eleven `trace_event` fields in
+declaration order. Times are nanosecond counts; kinds and drop reasons
+are the text-format names; tags are JSON numbers. Fields irrelevant to
+an event's kind still appear, with their defaults (a sent event shows
+`"reason": "loss"`): the shape is uniform, so a parser never has to
+guess which keys exist. One caveat: consumers that parse numbers as
+IEEE doubles (notably JavaScript) lose precision above 2^53 - the tag
+is the field where that matters, so compare tags as strings after
+parsing if exactness is needed. The text `dump_trace()` format is
+unchanged, and exporting never affects outcomes, like tracing itself.
+`dump_trace_json(std::ostream&)` streams incrementally, for traces too
+large to hold as one string. The scenario builder exposes the same
+call as `scenario::dump_trace_json()`.
+
 The scenario builder exposes the same API: `scenario::trace()`,
 `scenario::dump_trace()`, `expect_events(kind, n)` and
 `expect_events_between(kind, lo, hi)`.

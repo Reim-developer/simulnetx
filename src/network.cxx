@@ -5,6 +5,7 @@
 #include <utility>
 
 #include "simulnetx/errors.hxx"
+#include "simulnetx/json.hxx"
 #include "simulnetx/serializer.hxx"
 #include "simulnetx/tcp.hxx"
 #include "simulnetx/udp.hxx"
@@ -295,6 +296,25 @@ void network::dump_trace(std::ostream& out) const {
         write_event(out, event);
         out << '\n';
     }
+}
+
+std::string network::dump_trace_json() const {
+    std::ostringstream oss;
+    dump_trace_json(oss);
+    return oss.str();
+}
+
+void network::dump_trace_json(std::ostream& out) const {
+    json::array events;
+    events.reserve(trace_.size());
+    for (const trace_event& event : trace_) {
+        events.push_back(json::to_json(event));
+    }
+    const json::value root{json::object{
+        {"seed", json::value{seed_}},
+        {"events", json::value{std::move(events)}},
+    }};
+    json::dump(root, out);
 }
 
 std::string network::format_event(const trace_event& event) const {

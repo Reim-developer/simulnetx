@@ -176,6 +176,24 @@ public:
     std::string dump_trace() const;
     void dump_trace(std::ostream& out) const;
 
+    // The same trace as JSON: one object, compact, single line:
+    // {"seed": <seed>, "events": [<event>, ...]}. Each event is an
+    // object with all eleven trace_event fields in declaration order
+    // (see json.hxx); times are nanosecond counts, kinds and drop
+    // reasons are the text-format names, tags are JSON numbers. u64
+    // fields (at, bytes, tag, timer, request_id) print exactly, with
+    // one documented caveat: consumers that parse numbers as IEEE
+    // doubles (notably JavaScript) lose precision above 2^53 - the tag
+    // is the field where that matters, so compare tags as strings
+    // after parsing if exactness is needed. Fields irrelevant to an
+    // event's kind still appear, with their defaults (a sent event
+    // shows "reason": "loss"): the shape is uniform, one object per
+    // event, so a parser never has to guess which keys exist. The text
+    // dump_trace() format is unchanged. Exporting consumes no RNG and
+    // never affects outcomes, like tracing itself.
+    std::string dump_trace_json() const;
+    void dump_trace_json(std::ostream& out) const;
+
     // Format ONE event as a single line (no trailing newline), with node
     // names resolved. For filtered dumps: iterate trace(), pick the
     // events you want, format each. Only format events from THIS

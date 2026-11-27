@@ -110,6 +110,10 @@ std::string scenario::dump_trace() {
     return ensure_network().dump_trace();
 }
 
+std::string scenario::dump_trace_json() {
+    return ensure_network().dump_trace_json();
+}
+
 scenario& scenario::run_until(std::chrono::nanoseconds t) {
     ensure_network().run_until(t);
     return *this;
